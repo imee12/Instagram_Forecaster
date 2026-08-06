@@ -1,0 +1,6 @@
+*.gsheet
+*.gdoc
+*.gslides
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
