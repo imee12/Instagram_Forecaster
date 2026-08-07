@@ -1,0 +1,15 @@
+[project]
+name = "ig-forecaster"
+version = "0.1.0"
+description = "Refactored Instagram forecaster project"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas",
+  "sentence-transformers",
+  "faiss-cpu",
+  "pydantic",
+  "google-genai",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
