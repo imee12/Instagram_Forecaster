@@ -97,6 +97,10 @@ Current workflow:
 6. Generate structured content candidates.
 7. Score candidates and export the top three recommendations.
 
+The pipeline is exposed through `PipelineService`, whose stages can be invoked
+independently by the CLI, a future UI, or an agent. Saved artifacts can be loaded
+without calling Gemini or Google Trends again.
+
 ---
 
 # Planned Agent Workflow
@@ -104,7 +108,7 @@ Current workflow:
 1. Load historical analyses.
 2. Retrieve similar posts using semantic search.
 3. Analyze new media.
-4. Retrieve current Instagram trends.
+4. Retrieve current Google Trends signals.
 5. Combine retrieved context.
 6. Generate candidate posts.
 7. Score candidates.

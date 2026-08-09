@@ -22,6 +22,19 @@ Run the main entrypoint with:
 python -m ig_forecaster.main
 ```
 
+Pipeline stages can also be run independently for UI or agent integrations:
+
+```python
+from ig_forecaster.pipeline import PipelineService
+
+pipeline = PipelineService()
+artifacts = pipeline.load_project()          # No external API calls
+media, errors = pipeline.analyze_media()
+history = pipeline.retrieve_history(media)
+trends = pipeline.retrieve_trends()
+recommendations = pipeline.generate_recommendations(media, history, trends)
+```
+
 By default, files are read from the Google Drive for desktop project folder:
 
 ```text

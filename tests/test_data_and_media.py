@@ -67,39 +67,27 @@ def test_run_pipeline_uses_explicit_dataset_path(tmp_path, monkeypatch):
         [{"description": "A sample post", "media_type": "image", "category": "fashion"}]
     ).to_csv(dataset_path, index=False)
 
-    monkeypatch.setattr("ig_forecaster.main.get_project_root", lambda dataset_path=None: tmp_path)
-    monkeypatch.setattr("ig_forecaster.main.get_media_folder", lambda dataset_path=None: tmp_path / "available_media")
-    monkeypatch.setattr("ig_forecaster.main.find_media_files_in_project", lambda project_root, media_folder: [])
-    monkeypatch.setattr("ig_forecaster.main.build_or_load_index", lambda posts, dataset_path=None: (("index",), {"id": 1}, "model"))
-    monkeypatch.setattr("ig_forecaster.main.retrieve_historical_matches", lambda *args, **kwargs: pd.DataFrame())
-    monkeypatch.setattr("ig_forecaster.main.retrieve_google_trends", lambda: "trend-report")
-    monkeypatch.setattr(
-        "ig_forecaster.main.save_trend_report",
-        lambda report, output_folder: (
-            output_folder / "interest.csv",
-            output_folder / "related.csv",
-            output_folder / "momentum.csv",
-            output_folder / "signals.csv",
-        ),
-    )
-    monkeypatch.setattr("ig_forecaster.main.get_output_folder", lambda dataset_path=None: tmp_path / "output")
-    monkeypatch.setattr(
-        "ig_forecaster.main.generate_content_recommendations",
-        lambda *args, **kwargs: pd.DataFrame([{"rank": 1}]),
-    )
-    monkeypatch.setattr(
-        "ig_forecaster.main.save_content_recommendations",
-        lambda recommendations, output_folder: (
-            output_folder / "recommendations.json",
-            output_folder / "recommendations.csv",
-        ),
-    )
+    received = {}
+
+    class FakeResult:
+        def as_legacy_tuple(self):
+            return pd.DataFrame(), pd.DataFrame(), (("index",), {"id": 1}, "model")
+
+    class FakePipelineService:
+        def __init__(self, dataset_path=None):
+            received["dataset_path"] = dataset_path
+
+        def run_all(self):
+            return FakeResult()
+
+    monkeypatch.setattr("ig_forecaster.main.PipelineService", FakePipelineService)
 
     media_analyses_df, media_errors_df, index_payload = run_pipeline(dataset_path=dataset_path)
 
     assert media_analyses_df.empty
     assert media_errors_df.empty
     assert index_payload[0] == ("index",)
+    assert received["dataset_path"] == dataset_path
     assert "description" in load_posts(dataset_path).columns
 
 
@@ -111,38 +99,26 @@ def test_run_pipeline_accepts_project_directory_override(tmp_path, monkeypatch):
         [{"description": "A sample post", "media_type": "image", "category": "fashion"}]
     ).to_csv(dataset_path, index=False)
 
-    monkeypatch.setattr("ig_forecaster.main.get_project_root", lambda dataset_path=None: project_dir)
-    monkeypatch.setattr("ig_forecaster.main.get_media_folder", lambda dataset_path=None: project_dir / "available_media")
-    monkeypatch.setattr("ig_forecaster.main.find_media_files_in_project", lambda project_root, media_folder: [])
-    monkeypatch.setattr("ig_forecaster.main.build_or_load_index", lambda posts, dataset_path=None: (("index",), {"id": 1}, "model"))
-    monkeypatch.setattr("ig_forecaster.main.retrieve_historical_matches", lambda *args, **kwargs: pd.DataFrame())
-    monkeypatch.setattr("ig_forecaster.main.retrieve_google_trends", lambda: "trend-report")
-    monkeypatch.setattr(
-        "ig_forecaster.main.save_trend_report",
-        lambda report, output_folder: (
-            output_folder / "interest.csv",
-            output_folder / "related.csv",
-            output_folder / "momentum.csv",
-            output_folder / "signals.csv",
-        ),
-    )
-    monkeypatch.setattr("ig_forecaster.main.get_output_folder", lambda dataset_path=None: project_dir / "output")
-    monkeypatch.setattr(
-        "ig_forecaster.main.generate_content_recommendations",
-        lambda *args, **kwargs: pd.DataFrame([{"rank": 1}]),
-    )
-    monkeypatch.setattr(
-        "ig_forecaster.main.save_content_recommendations",
-        lambda recommendations, output_folder: (
-            output_folder / "recommendations.json",
-            output_folder / "recommendations.csv",
-        ),
-    )
+    received = {}
+
+    class FakeResult:
+        def as_legacy_tuple(self):
+            return pd.DataFrame(), pd.DataFrame(), (("index",), {"id": 1}, "model")
+
+    class FakePipelineService:
+        def __init__(self, dataset_path=None):
+            received["dataset_path"] = dataset_path
+
+        def run_all(self):
+            return FakeResult()
+
+    monkeypatch.setattr("ig_forecaster.main.PipelineService", FakePipelineService)
 
     media_analyses_df, media_errors_df, _ = run_pipeline(dataset_path=project_dir)
 
     assert media_analyses_df.empty
     assert media_errors_df.empty
+    assert received["dataset_path"] == project_dir
 
 
 def test_find_media_files_in_project_falls_back_to_project_root(tmp_path):
