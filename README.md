@@ -29,3 +29,18 @@ By default, files are read from the Google Drive for desktop project folder:
 ```
 
 Set `IG_FORECASTER_PROJECT_ROOT` to use a different project folder.
+
+## LangSmith tracing
+
+Create a LangSmith API key, then configure tracing in the terminal where the
+application will run:
+
+```bash
+export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY="your-langsmith-api-key"
+export LANGSMITH_PROJECT="ig-forecaster-development"
+```
+
+Run the pipeline and open the `ig-forecaster-development` project in LangSmith
+to inspect the pipeline, historical index, media-analysis, Gemini, and Google
+Trends spans.

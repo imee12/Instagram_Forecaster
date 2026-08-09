@@ -9,6 +9,8 @@ dependencies = [
   "faiss-cpu",
   "pydantic",
   "google-genai",
+  "langsmith>=0.1.98",
+  "pytrends==4.9.2",
 ]
 
 [tool.pytest.ini_options]

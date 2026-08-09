@@ -6,14 +6,45 @@ from pathlib import Path
 
 import pandas as pd
 from google.genai import types
+from langsmith import traceable
 
-from .config import get_media_folder, get_project_root, resolve_dataset_path
+from .config import get_media_folder, get_output_folder, get_project_root, resolve_dataset_path
 from .data import load_posts
 from .gemini_client import MODEL_NAME, get_or_create_client, wait_until_ready
 from .media import MediaAnalysis, find_media_files_in_project
 from .retrieval import build_or_load_index
+from .trends import retrieve_google_trends, save_trend_report
 
 
+def _media_trace_inputs(inputs: dict) -> dict:
+    return {"file_path": str(inputs.get("path"))}
+
+
+def _media_trace_outputs(output: MediaAnalysis) -> dict:
+    return output.model_dump()
+
+
+def _pipeline_trace_inputs(inputs: dict) -> dict:
+    dataset_path = inputs.get("dataset_path")
+    return {"dataset_path": str(dataset_path) if dataset_path is not None else None}
+
+
+def _pipeline_trace_outputs(output: tuple) -> dict:
+    analyses, errors, retrieval_payload = output
+    _, metadata, _ = retrieval_payload
+    return {
+        "media_analysis_count": len(analyses),
+        "media_error_count": len(errors),
+        "historical_post_count": len(metadata),
+    }
+
+
+@traceable(
+    name="Analyze Media Asset",
+    run_type="tool",
+    process_inputs=_media_trace_inputs,
+    process_outputs=_media_trace_outputs,
+)
 def analyze_media_file(path: Path, client_instance=None) -> MediaAnalysis:
     from .media import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 
@@ -94,6 +125,12 @@ def _save_analysis_cache(cache_path: Path, cache: dict[str, dict]) -> None:
     cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
 
 
+@traceable(
+    name="IG Forecaster Pipeline",
+    run_type="chain",
+    process_inputs=_pipeline_trace_inputs,
+    process_outputs=_pipeline_trace_outputs,
+)
 def run_pipeline(dataset_path: str | Path | None = None) -> tuple[pd.DataFrame, pd.DataFrame, tuple]:
     resolved_dataset_path = resolve_dataset_path(dataset_path)
     project_root = get_project_root(dataset_path=resolved_dataset_path)
@@ -132,6 +169,15 @@ def run_pipeline(dataset_path: str | Path | None = None) -> tuple[pd.DataFrame, 
             print(f"Failed: {exc}")
 
     _save_analysis_cache(cache_path, analysis_cache)
+
+    print("\nRetrieving Google Trends data...")
+    trend_report = retrieve_google_trends()
+    trend_paths = save_trend_report(
+        trend_report,
+        get_output_folder(dataset_path=resolved_dataset_path),
+    )
+    print(f"Saved trend interest: {trend_paths[0]}")
+    print(f"Saved related queries: {trend_paths[1]}")
 
     media_analyses_df = pd.DataFrame(analyses)
     media_errors_df = pd.DataFrame(errors)

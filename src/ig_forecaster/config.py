@@ -97,6 +97,13 @@ def get_index_folder(dataset_path: str | Path | None = None) -> Path:
     return index_folder
 
 
+def get_output_folder(dataset_path: str | Path | None = None) -> Path:
+    project_root = get_project_root(dataset_path=dataset_path)
+    output_folder = project_root / "output"
+    output_folder.mkdir(parents=True, exist_ok=True)
+    return output_folder
+
+
 def resolve_dataset_path(dataset_path: str | Path | None = None) -> Path:
     if dataset_path is None:
         discovered_path = _find_dataset_path()

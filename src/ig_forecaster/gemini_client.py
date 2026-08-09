@@ -13,6 +13,11 @@ try:
 except ImportError:  # pragma: no cover - exercised in lightweight environments
     types = None
 
+try:
+    from langsmith import wrappers as langsmith_wrappers
+except ImportError:  # pragma: no cover - exercised in lightweight environments
+    langsmith_wrappers = None
+
 MODEL_NAME = "gemini-flash-latest"
 
 client = None
@@ -25,7 +30,17 @@ def get_client():
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("Add GEMINI_API_KEY in your environment or Colab secrets.")
-    return genai.Client(api_key=api_key)
+    gemini_client = genai.Client(api_key=api_key)
+    if langsmith_wrappers is None:
+        return gemini_client
+
+    return langsmith_wrappers.wrap_gemini(
+        gemini_client,
+        tracing_extra={
+            "tags": ["gemini", "media-analysis"],
+            "metadata": {"model": MODEL_NAME},
+        },
+    )
 
 
 def get_or_create_client():
