@@ -105,6 +105,10 @@ The conversational layer uses a LangGraph-backed agent with project tools and
 SQLite checkpoint persistence. Each UI conversation will use a stable thread ID
 so messages and agent state can resume across interactions.
 
+The local user interface is a Streamlit dashboard with agent chat, pipeline
+controls, recommendation cards, media previews, trend signals, historical
+matches, and artifact/error status.
+
 ---
 
 # Planned Agent Workflow

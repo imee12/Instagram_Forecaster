@@ -49,6 +49,12 @@ with IGForecasterAgent() as agent:
     print(result["messages"][-1].content)
 ```
 
+Run the local interactive interface with:
+
+```bash
+streamlit run src/ig_forecaster/ui/app.py
+```
+
 By default, files are read from the Google Drive for desktop project folder:
 
 ```text

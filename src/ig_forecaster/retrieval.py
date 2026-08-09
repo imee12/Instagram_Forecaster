@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -10,11 +11,6 @@ try:
     import numpy as np
 except ImportError:  # pragma: no cover - exercised in lightweight environments
     np = None
-
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:  # pragma: no cover - exercised in lightweight environments
-    SentenceTransformer = None
 
 from .config import get_index_folder
 from .data import load_posts
@@ -80,18 +76,29 @@ def _search_trace_outputs(output: pd.DataFrame) -> dict:
     return {"documents": documents}
 
 
+@lru_cache(maxsize=1)
+def _sentence_transformer_class():
+    try:
+        from sentence_transformers import SentenceTransformer
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise ImportError(
+            "Install compatible sentence-transformers and transformers packages "
+            "to use historical retrieval."
+        ) from exc
+    return SentenceTransformer
+
+
 def _require_runtime_dependencies() -> None:
     missing = []
     if np is None:
         missing.append("numpy")
-    if SentenceTransformer is None:
-        missing.append("sentence-transformers")
 
     if missing:
         raise ImportError(
             "Missing optional dependencies for retrieval: "
             + ", ".join(missing)
         )
+    _sentence_transformer_class()
 
 
 @traceable(
@@ -102,6 +109,7 @@ def _require_runtime_dependencies() -> None:
 )
 def build_or_load_index(posts: pd.DataFrame | None = None, index_folder: Path | None = None, dataset_path: str | Path | None = None) -> tuple[object, pd.DataFrame, object]:
     _require_runtime_dependencies()
+    sentence_transformer = _sentence_transformer_class()
     index_folder = index_folder or get_index_folder(dataset_path=dataset_path)
     embeddings_path = index_folder / "historical_posts_embeddings.npy"
     metadata_path = index_folder / "historical_posts_metadata.csv"
@@ -109,13 +117,13 @@ def build_or_load_index(posts: pd.DataFrame | None = None, index_folder: Path | 
     posts = posts if posts is not None else load_posts()
 
     if embeddings_path.exists() and metadata_path.exists():
-        embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        embedding_model = sentence_transformer(EMBEDDING_MODEL_NAME)
         metadata = pd.read_csv(metadata_path)
         saved_embeddings = np.load(embeddings_path)
         if len(metadata) == len(saved_embeddings) == len(posts):
             return NumpyFlatIPIndex(saved_embeddings), metadata, embedding_model
 
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    embedding_model = sentence_transformer(EMBEDDING_MODEL_NAME)
     post_embeddings = embedding_model.encode(
         posts["retrieval_text"].tolist(),
         normalize_embeddings=True,

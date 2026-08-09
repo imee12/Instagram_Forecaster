@@ -27,6 +27,7 @@ dist/
 
 # Generated application data
 .media_analysis_cache.json
+agent_checkpoints.sqlite*
 indexes/
 *.faiss
 *.index
@@ -39,5 +40,6 @@ available_media/
 .DS_Store
 .idea/
 .vscode/
+.streamlit/secrets.toml
 *.swp
 *~

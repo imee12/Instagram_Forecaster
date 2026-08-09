@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
   "pandas",
   "sentence-transformers",
+  "transformers>=4.41,<5",
   "pydantic",
   "google-genai",
   "langsmith>=0.1.98",
@@ -14,6 +15,7 @@ dependencies = [
   "langgraph>=1.0",
   "langgraph-checkpoint-sqlite>=3.0",
   "pytrends==4.9.2",
+  "streamlit>=1.40",
 ]
 
 [tool.pytest.ini_options]
