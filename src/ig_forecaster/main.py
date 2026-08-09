@@ -12,6 +12,10 @@ from .config import get_media_folder, get_output_folder, get_project_root, resol
 from .data import load_posts
 from .gemini_client import MODEL_NAME, get_or_create_client, wait_until_ready
 from .media import MediaAnalysis, find_media_files_in_project
+from .recommendations import (
+    generate_content_recommendations,
+    save_content_recommendations,
+)
 from .retrieval import build_or_load_index, retrieve_historical_matches
 from .trends import (
     load_cached_trend_report,
@@ -216,6 +220,16 @@ def run_pipeline(dataset_path: str | Path | None = None) -> tuple[pd.DataFrame, 
     print(f"Saved related queries: {trend_paths[1]}")
     print(f"Saved keyword momentum: {trend_paths[2]}")
     print(f"Saved agent-ready trend signals: {trend_paths[3]}")
+
+    print("\nGenerating content recommendations...")
+    recommendations = generate_content_recommendations(
+        media_analyses_df,
+        historical_matches,
+        trend_report,
+    )
+    recommendation_paths = save_content_recommendations(recommendations, output_folder)
+    print(f"Saved recommendations JSON: {recommendation_paths[0]}")
+    print(f"Saved recommendations CSV: {recommendation_paths[1]}")
 
     return media_analyses_df, media_errors_df, (index, metadata, embedding_model)
 

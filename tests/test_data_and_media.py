@@ -83,6 +83,17 @@ def test_run_pipeline_uses_explicit_dataset_path(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr("ig_forecaster.main.get_output_folder", lambda dataset_path=None: tmp_path / "output")
+    monkeypatch.setattr(
+        "ig_forecaster.main.generate_content_recommendations",
+        lambda *args, **kwargs: pd.DataFrame([{"rank": 1}]),
+    )
+    monkeypatch.setattr(
+        "ig_forecaster.main.save_content_recommendations",
+        lambda recommendations, output_folder: (
+            output_folder / "recommendations.json",
+            output_folder / "recommendations.csv",
+        ),
+    )
 
     media_analyses_df, media_errors_df, index_payload = run_pipeline(dataset_path=dataset_path)
 
@@ -116,6 +127,17 @@ def test_run_pipeline_accepts_project_directory_override(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr("ig_forecaster.main.get_output_folder", lambda dataset_path=None: project_dir / "output")
+    monkeypatch.setattr(
+        "ig_forecaster.main.generate_content_recommendations",
+        lambda *args, **kwargs: pd.DataFrame([{"rank": 1}]),
+    )
+    monkeypatch.setattr(
+        "ig_forecaster.main.save_content_recommendations",
+        lambda recommendations, output_folder: (
+            output_folder / "recommendations.json",
+            output_folder / "recommendations.csv",
+        ),
+    )
 
     media_analyses_df, media_errors_df, _ = run_pipeline(dataset_path=project_dir)
 

@@ -84,14 +84,20 @@ def find_media_files_in_project(project_root: Path, media_folder: Path | None = 
         ]
     )
 
-    seen: set[Path] = set()
+    seen_folders: set[Path] = set()
+    seen_files: set[Path] = set()
     discovered: list[Path] = []
     for candidate in candidates:
         if not candidate.exists():
             continue
-        if candidate in seen:
+        if candidate in seen_folders:
             continue
-        seen.add(candidate)
-        discovered.extend(find_media_files(candidate))
+        seen_folders.add(candidate)
+        for media_file in find_media_files(candidate):
+            resolved_file = media_file.resolve()
+            if resolved_file in seen_files:
+                continue
+            seen_files.add(resolved_file)
+            discovered.append(media_file)
 
     return sorted(discovered)

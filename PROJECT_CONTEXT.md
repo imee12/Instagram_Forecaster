@@ -92,9 +92,10 @@ Current workflow:
 1. Read media files.
 2. Analyze each image/video with Gemini.
 3. Store structured analysis.
-4. Save analyses to DataFrame.
-5. Export CSV.
-6. Future retrieval will use vector embeddings.
+4. Retrieve similar historical posts with vector embeddings.
+5. Retrieve and rank Google Trends signals.
+6. Generate structured content candidates.
+7. Score candidates and export the top three recommendations.
 
 ---
 
