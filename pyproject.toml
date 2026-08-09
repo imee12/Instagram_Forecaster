@@ -9,6 +9,10 @@ dependencies = [
   "pydantic",
   "google-genai",
   "langsmith>=0.1.98",
+  "langchain>=1.0",
+  "langchain-google-genai>=4.0",
+  "langgraph>=1.0",
+  "langgraph-checkpoint-sqlite>=3.0",
   "pytrends==4.9.2",
 ]
 

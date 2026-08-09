@@ -101,6 +101,10 @@ The pipeline is exposed through `PipelineService`, whose stages can be invoked
 independently by the CLI, a future UI, or an agent. Saved artifacts can be loaded
 without calling Gemini or Google Trends again.
 
+The conversational layer uses a LangGraph-backed agent with project tools and
+SQLite checkpoint persistence. Each UI conversation will use a stable thread ID
+so messages and agent state can resume across interactions.
+
 ---
 
 # Planned Agent Workflow

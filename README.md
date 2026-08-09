@@ -35,6 +35,20 @@ trends = pipeline.retrieve_trends()
 recommendations = pipeline.generate_recommendations(media, history, trends)
 ```
 
+The conversational agent wraps those stages with LangGraph tools and persistent
+SQLite thread state:
+
+```python
+from ig_forecaster.agent import IGForecasterAgent
+
+with IGForecasterAgent() as agent:
+    result = agent.invoke(
+        "Show me the saved recommendations.",
+        thread_id="local-development",
+    )
+    print(result["messages"][-1].content)
+```
+
 By default, files are read from the Google Drive for desktop project folder:
 
 ```text
