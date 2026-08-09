@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping, Sequence
 
 import pandas as pd
 from langsmith import traceable
-
-try:
-    import faiss
-except ImportError:  # pragma: no cover - exercised in lightweight environments
-    faiss = None
 
 try:
     import numpy as np
@@ -25,6 +21,30 @@ from .data import load_posts
 
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+DEFAULT_TOP_K = 3
+
+
+class NumpyFlatIPIndex:
+    """Safe exact cosine search for normalized embeddings."""
+
+    def __init__(self, embeddings: object):
+        self.embeddings = np.ascontiguousarray(embeddings, dtype="float32")
+        if self.embeddings.ndim != 2:
+            raise ValueError("Historical embeddings must be a two-dimensional matrix.")
+        self.ntotal, self.d = self.embeddings.shape
+
+    def search(self, queries: object, top_k: int) -> tuple[object, object]:
+        query_matrix = np.ascontiguousarray(queries, dtype="float32")
+        if query_matrix.ndim != 2 or query_matrix.shape[1] != self.d:
+            raise ValueError(
+                f"Query embedding dimension {query_matrix.shape} does not match index dimension {self.d}."
+            )
+
+        similarities = query_matrix @ self.embeddings.T
+        result_count = min(top_k, self.ntotal)
+        positions = np.argsort(-similarities, axis=1)[:, :result_count]
+        scores = np.take_along_axis(similarities, positions, axis=1)
+        return scores.astype("float32"), positions.astype("int64")
 
 
 def _index_trace_inputs(inputs: dict) -> dict:
@@ -45,10 +65,23 @@ def _index_trace_outputs(output: tuple) -> dict:
     }
 
 
+def _search_trace_inputs(inputs: dict) -> dict:
+    return {
+        "query_text": inputs.get("query_text"),
+        "top_k": inputs.get("top_k", DEFAULT_TOP_K),
+    }
+
+
+def _search_trace_outputs(output: pd.DataFrame) -> dict:
+    documents = []
+    for row in output.to_dict(orient="records"):
+        page_content = row.pop("retrieval_text", row.get("description", ""))
+        documents.append({"page_content": page_content, "metadata": row})
+    return {"documents": documents}
+
+
 def _require_runtime_dependencies() -> None:
     missing = []
-    if faiss is None:
-        missing.append("faiss-cpu")
     if np is None:
         missing.append("numpy")
     if SentenceTransformer is None:
@@ -68,17 +101,19 @@ def _require_runtime_dependencies() -> None:
     process_outputs=_index_trace_outputs,
 )
 def build_or_load_index(posts: pd.DataFrame | None = None, index_folder: Path | None = None, dataset_path: str | Path | None = None) -> tuple[object, pd.DataFrame, object]:
+    _require_runtime_dependencies()
     index_folder = index_folder or get_index_folder(dataset_path=dataset_path)
-    index_path = index_folder / "historical_posts.index"
+    embeddings_path = index_folder / "historical_posts_embeddings.npy"
     metadata_path = index_folder / "historical_posts_metadata.csv"
 
     posts = posts if posts is not None else load_posts()
 
-    if index_path.exists() and metadata_path.exists():
+    if embeddings_path.exists() and metadata_path.exists():
         embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-        index = faiss.read_index(str(index_path))
         metadata = pd.read_csv(metadata_path)
-        return index, metadata, embedding_model
+        saved_embeddings = np.load(embeddings_path)
+        if len(metadata) == len(saved_embeddings) == len(posts):
+            return NumpyFlatIPIndex(saved_embeddings), metadata, embedding_model
 
     embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     post_embeddings = embedding_model.encode(
@@ -88,12 +123,106 @@ def build_or_load_index(posts: pd.DataFrame | None = None, index_folder: Path | 
     )
     post_embeddings = np.asarray(post_embeddings, dtype="float32")
 
-    dimension = post_embeddings.shape[1]
-    index = faiss.IndexFlatIP(dimension)
-    index.add(post_embeddings)
+    safe_index = NumpyFlatIPIndex(post_embeddings)
 
     index_folder.mkdir(parents=True, exist_ok=True)
-    faiss.write_index(index, str(index_path))
+    np.save(embeddings_path, post_embeddings)
     posts.to_csv(metadata_path, index=False)
 
-    return index, posts, embedding_model
+    return safe_index, posts, embedding_model
+
+
+def build_media_query_text(analysis: Mapping[str, object]) -> str:
+    def join_values(key: str) -> str:
+        value = analysis.get(key)
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return ", ".join(str(item) for item in value if item)
+        return str(value) if value else ""
+
+    parts = [
+        f"Visual content: {join_values('visual_summary')}",
+        f"Media type: {join_values('media_type')}",
+        f"Themes: {join_values('themes')}",
+        f"Content categories: {join_values('content_categories')}",
+        f"Possible uses: {join_values('possible_post_uses')}",
+    ]
+    return ". ".join(part for part in parts if not part.endswith(": "))
+
+
+@traceable(
+    name="Retrieve Similar Historical Posts",
+    run_type="retriever",
+    process_inputs=_search_trace_inputs,
+    process_outputs=_search_trace_outputs,
+)
+def retrieve_similar_posts(
+    query_text: str,
+    index: object,
+    metadata: pd.DataFrame,
+    embedding_model: object,
+    *,
+    top_k: int = DEFAULT_TOP_K,
+) -> pd.DataFrame:
+    _require_runtime_dependencies()
+    if not query_text.strip():
+        raise ValueError("Historical retrieval query cannot be empty.")
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1.")
+    if metadata.empty:
+        return pd.DataFrame(columns=["retrieval_rank", "similarity_score", *metadata.columns])
+
+    query_embedding = embedding_model.encode(
+        [query_text],
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    query_embedding = np.ascontiguousarray(query_embedding, dtype="float32")
+    expected_dimension = getattr(index, "d", query_embedding.shape[1])
+    if query_embedding.shape != (1, expected_dimension):
+        raise ValueError(
+            "Query embedding shape does not match the historical index: "
+            f"{query_embedding.shape} versus dimension {expected_dimension}."
+        )
+    result_count = min(top_k, len(metadata))
+    scores, positions = index.search(query_embedding, result_count)
+
+    records = []
+    for rank, (position, score) in enumerate(zip(positions[0], scores[0]), start=1):
+        if position < 0 or position >= len(metadata):
+            continue
+        record = metadata.iloc[int(position)].to_dict()
+        record["retrieval_rank"] = rank
+        record["similarity_score"] = round(float(score), 6)
+        records.append(record)
+
+    leading_columns = ["retrieval_rank", "similarity_score"]
+    return pd.DataFrame(records).reindex(columns=[*leading_columns, *metadata.columns])
+
+
+@traceable(name="Match Media to Historical Posts", run_type="chain")
+def retrieve_historical_matches(
+    media_analyses: pd.DataFrame,
+    index: object,
+    metadata: pd.DataFrame,
+    embedding_model: object,
+    *,
+    top_k: int = DEFAULT_TOP_K,
+) -> pd.DataFrame:
+    match_frames = []
+    for analysis in media_analyses.to_dict(orient="records"):
+        matches = retrieve_similar_posts(
+            build_media_query_text(analysis),
+            index,
+            metadata,
+            embedding_model,
+            top_k=top_k,
+        )
+        matches.insert(0, "media_file", analysis.get("file_name"))
+        matches.insert(1, "media_path", analysis.get("file_path"))
+        match_frames.append(matches)
+
+    if not match_frames:
+        return pd.DataFrame(
+            columns=["media_file", "media_path", "retrieval_rank", "similarity_score"]
+        )
+    return pd.concat(match_frames, ignore_index=True)

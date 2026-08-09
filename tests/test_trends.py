@@ -1,7 +1,15 @@
+from datetime import datetime, timedelta, timezone
+import os
+
 import pandas as pd
 import pytest
 
-from ig_forecaster.trends import retrieve_google_trends, save_trend_report
+from ig_forecaster.trends import (
+    load_cached_trend_report,
+    retrieve_google_trends,
+    save_trend_report,
+    trend_cache_is_fresh,
+)
 
 
 class FakeTrendsClient:
@@ -34,6 +42,14 @@ def test_retrieve_google_trends_normalizes_results():
     assert client.payload["kw_list"] == ["new music"]
     assert "isPartial" not in report.interest_over_time.columns
     assert set(report.related_queries["query_type"]) == {"top", "rising"}
+    assert report.keyword_momentum.iloc[0]["trend_direction"] == "rising"
+    assert report.keyword_momentum.iloc[0]["growth_percent"] == 50
+    assert report.agent_signals.iloc[0]["topic"] == "new songs"
+    assert set(report.agent_signals["signal_type"]) == {
+        "keyword_momentum",
+        "top_related_query",
+        "rising_related_query",
+    }
 
 
 def test_retrieve_google_trends_rejects_more_than_five_keywords():
@@ -44,7 +60,27 @@ def test_retrieve_google_trends_rejects_more_than_five_keywords():
 def test_save_trend_report_exports_csv_files(tmp_path):
     report = retrieve_google_trends(["new music"], client=FakeTrendsClient())
 
-    interest_path, related_path = save_trend_report(report, tmp_path)
+    interest_path, related_path, momentum_path, agent_signals_path = save_trend_report(
+        report,
+        tmp_path,
+    )
 
     assert interest_path.exists()
     assert related_path.exists()
+    assert momentum_path.exists()
+    assert agent_signals_path.exists()
+
+    cached_report = load_cached_trend_report(tmp_path)
+    assert cached_report is not None
+    assert cached_report.agent_signals.iloc[0]["topic"] == "new songs"
+    assert trend_cache_is_fresh(tmp_path)
+
+
+def test_trend_cache_detects_stale_files(tmp_path):
+    report = retrieve_google_trends(["new music"], client=FakeTrendsClient())
+    paths = save_trend_report(report, tmp_path)
+    file_time = datetime.now(timezone.utc) - timedelta(days=1)
+    for path in paths:
+        os.utime(path, (file_time.timestamp(), file_time.timestamp()))
+
+    assert not trend_cache_is_fresh(tmp_path)

@@ -6,7 +6,6 @@ requires-python = ">=3.10"
 dependencies = [
   "pandas",
   "sentence-transformers",
-  "faiss-cpu",
   "pydantic",
   "google-genai",
   "langsmith>=0.1.98",

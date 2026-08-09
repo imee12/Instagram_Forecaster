@@ -32,9 +32,9 @@ def _candidate_project_roots() -> list[Path]:
 
     candidates.extend(
         [
+            Path.cwd(),
             PROJECT_ROOT,
             COLAB_PROJECT_ROOT,
-            Path.cwd(),
         ]
     )
 

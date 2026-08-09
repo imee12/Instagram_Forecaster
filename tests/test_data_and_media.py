@@ -71,10 +71,16 @@ def test_run_pipeline_uses_explicit_dataset_path(tmp_path, monkeypatch):
     monkeypatch.setattr("ig_forecaster.main.get_media_folder", lambda dataset_path=None: tmp_path / "available_media")
     monkeypatch.setattr("ig_forecaster.main.find_media_files_in_project", lambda project_root, media_folder: [])
     monkeypatch.setattr("ig_forecaster.main.build_or_load_index", lambda posts, dataset_path=None: (("index",), {"id": 1}, "model"))
+    monkeypatch.setattr("ig_forecaster.main.retrieve_historical_matches", lambda *args, **kwargs: pd.DataFrame())
     monkeypatch.setattr("ig_forecaster.main.retrieve_google_trends", lambda: "trend-report")
     monkeypatch.setattr(
         "ig_forecaster.main.save_trend_report",
-        lambda report, output_folder: (output_folder / "interest.csv", output_folder / "related.csv"),
+        lambda report, output_folder: (
+            output_folder / "interest.csv",
+            output_folder / "related.csv",
+            output_folder / "momentum.csv",
+            output_folder / "signals.csv",
+        ),
     )
     monkeypatch.setattr("ig_forecaster.main.get_output_folder", lambda dataset_path=None: tmp_path / "output")
 
@@ -98,10 +104,16 @@ def test_run_pipeline_accepts_project_directory_override(tmp_path, monkeypatch):
     monkeypatch.setattr("ig_forecaster.main.get_media_folder", lambda dataset_path=None: project_dir / "available_media")
     monkeypatch.setattr("ig_forecaster.main.find_media_files_in_project", lambda project_root, media_folder: [])
     monkeypatch.setattr("ig_forecaster.main.build_or_load_index", lambda posts, dataset_path=None: (("index",), {"id": 1}, "model"))
+    monkeypatch.setattr("ig_forecaster.main.retrieve_historical_matches", lambda *args, **kwargs: pd.DataFrame())
     monkeypatch.setattr("ig_forecaster.main.retrieve_google_trends", lambda: "trend-report")
     monkeypatch.setattr(
         "ig_forecaster.main.save_trend_report",
-        lambda report, output_folder: (output_folder / "interest.csv", output_folder / "related.csv"),
+        lambda report, output_folder: (
+            output_folder / "interest.csv",
+            output_folder / "related.csv",
+            output_folder / "momentum.csv",
+            output_folder / "signals.csv",
+        ),
     )
     monkeypatch.setattr("ig_forecaster.main.get_output_folder", lambda dataset_path=None: project_dir / "output")
 

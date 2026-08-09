@@ -12,8 +12,14 @@ from .config import get_media_folder, get_output_folder, get_project_root, resol
 from .data import load_posts
 from .gemini_client import MODEL_NAME, get_or_create_client, wait_until_ready
 from .media import MediaAnalysis, find_media_files_in_project
-from .retrieval import build_or_load_index
-from .trends import retrieve_google_trends, save_trend_report
+from .retrieval import build_or_load_index, retrieve_historical_matches
+from .trends import (
+    load_cached_trend_report,
+    retrieve_google_trends,
+    save_trend_report,
+    trend_cache_is_fresh,
+    trend_report_paths,
+)
 
 
 def _media_trace_inputs(inputs: dict) -> dict:
@@ -29,7 +35,9 @@ def _pipeline_trace_inputs(inputs: dict) -> dict:
     return {"dataset_path": str(dataset_path) if dataset_path is not None else None}
 
 
-def _pipeline_trace_outputs(output: tuple) -> dict:
+def _pipeline_trace_outputs(output: tuple | None) -> dict:
+    if output is None:
+        return {"status": "failed"}
     analyses, errors, retrieval_payload = output
     _, metadata, _ = retrieval_payload
     return {
@@ -170,17 +178,44 @@ def run_pipeline(dataset_path: str | Path | None = None) -> tuple[pd.DataFrame, 
 
     _save_analysis_cache(cache_path, analysis_cache)
 
-    print("\nRetrieving Google Trends data...")
-    trend_report = retrieve_google_trends()
-    trend_paths = save_trend_report(
-        trend_report,
-        get_output_folder(dataset_path=resolved_dataset_path),
-    )
-    print(f"Saved trend interest: {trend_paths[0]}")
-    print(f"Saved related queries: {trend_paths[1]}")
-
     media_analyses_df = pd.DataFrame(analyses)
     media_errors_df = pd.DataFrame(errors)
+    output_folder = get_output_folder(dataset_path=resolved_dataset_path)
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    print("\nRetrieving similar historical posts...")
+    historical_matches = retrieve_historical_matches(
+        media_analyses_df,
+        index,
+        metadata,
+        embedding_model,
+    )
+    historical_matches_path = output_folder / "historical_media_matches.csv"
+    historical_matches.to_csv(historical_matches_path, index=False)
+    print(f"Saved historical matches: {historical_matches_path}")
+
+    print("\nRetrieving Google Trends data...")
+    cached_trend_report = load_cached_trend_report(output_folder)
+    if cached_trend_report is not None and trend_cache_is_fresh(output_folder):
+        trend_report = cached_trend_report
+        trend_paths = trend_report_paths(output_folder)
+        print("Using Google Trends cache from the last six hours.")
+    else:
+        try:
+            trend_report = retrieve_google_trends()
+            trend_paths = save_trend_report(trend_report, output_folder)
+        except Exception as exc:
+            if cached_trend_report is None:
+                raise RuntimeError(
+                    "Google Trends retrieval failed and no cached trend report is available."
+                ) from exc
+            trend_report = cached_trend_report
+            trend_paths = trend_report_paths(output_folder)
+            print(f"Google Trends refresh failed; using the last saved report: {exc}")
+    print(f"Saved trend interest: {trend_paths[0]}")
+    print(f"Saved related queries: {trend_paths[1]}")
+    print(f"Saved keyword momentum: {trend_paths[2]}")
+    print(f"Saved agent-ready trend signals: {trend_paths[3]}")
 
     return media_analyses_df, media_errors_df, (index, metadata, embedding_model)
 
