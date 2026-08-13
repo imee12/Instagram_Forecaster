@@ -1,6 +1,8 @@
 import json
+from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from ig_forecaster.pipeline import PipelineService
 
@@ -48,6 +50,20 @@ def test_pipeline_service_loads_saved_artifacts_without_external_calls(tmp_path)
     assert service.load_saved_media_analyses().iloc[0]["file_name"] == "photo.jpg"
     assert service.load_saved_historical_matches().iloc[0]["post_id"] == 1
     assert service.load_saved_recommendations().iloc[0]["concept"] == "Portrait"
+
+
+def test_saved_json_timeout_returns_empty_frame(tmp_path, monkeypatch):
+    _, dataset = make_project(tmp_path)
+    service = PipelineService(dataset_path=dataset)
+    service.artifacts.media_analyses_path.write_text("[]", encoding="utf-8")
+
+    def time_out(*args, **kwargs):
+        raise TimeoutError("cloud file unavailable")
+
+    monkeypatch.setattr(Path, "read_text", time_out)
+
+    with pytest.warns(RuntimeWarning, match="could not be read"):
+        assert service.load_saved_media_analyses().empty
 
 
 def test_pipeline_stages_can_use_saved_inputs_independently(tmp_path, monkeypatch):

@@ -13,6 +13,7 @@ from ..gemini_client import MODEL_NAME
 from ..pipeline import PipelineService
 from .state import IGForecasterState
 from .tools import build_agent_tools
+from .workflow import ForecastWorkflow
 
 
 SYSTEM_PROMPT = """
@@ -37,6 +38,7 @@ def build_agent(
     service: PipelineService,
     *,
     checkpointer: BaseCheckpointSaver | None = None,
+    workflow: ForecastWorkflow | None = None,
     model=None,
 ):
     chat_model = model or ChatGoogleGenerativeAI(
@@ -45,7 +47,7 @@ def build_agent(
     )
     return create_agent(
         model=chat_model,
-        tools=build_agent_tools(service),
+        tools=build_agent_tools(service, workflow),
         system_prompt=SYSTEM_PROMPT,
         state_schema=IGForecasterState,
         checkpointer=checkpointer,
@@ -69,9 +71,14 @@ class IGForecasterAgent:
         database_path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(database_path, check_same_thread=False)
         self.checkpointer = SqliteSaver(self._connection)
+        self.workflow = ForecastWorkflow(
+            self.service,
+            checkpointer=self.checkpointer,
+        )
         self.graph = build_agent(
             self.service,
             checkpointer=self.checkpointer,
+            workflow=self.workflow,
             model=model,
         )
 

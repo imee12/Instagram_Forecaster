@@ -77,3 +77,18 @@ def test_recommendation_tool_returns_serializable_records():
 
     assert result["recommendation_count"] == 1
     assert result["recommendations"][0]["concept"] == "Music Reel"
+
+
+def test_workflow_tool_gets_thread_id_from_runtime_not_model_schema():
+    workflow = SimpleNamespace(invoke=lambda **kwargs: kwargs)
+    tools = {
+        tool.name: tool for tool in build_agent_tools(FakeService(), workflow=workflow)
+    }
+
+    workflow_tool = tools["run_forecast_workflow"]
+
+    assert set(workflow_tool.args) == {
+        "force_media_refresh",
+        "force_trend_refresh",
+        "force_recommendation_refresh",
+    }

@@ -6,10 +6,10 @@ from pathlib import Path
 import uuid
 
 import pandas as pd
+from dotenv import load_dotenv
 import streamlit as st
 
-from ig_forecaster.agent import IGForecasterAgent
-
+from ig_forecaster.agent import RemoteIGForecasterAgent
 
 st.set_page_config(
     page_title="IG Forecaster",
@@ -24,6 +24,37 @@ APP_STYLES = """
     .stApp { background: #f5f2ec; color: #171714; }
     [data-testid="stSidebar"] { background: #171714; }
     [data-testid="stSidebar"] * { color: #f7f3eb; }
+    [data-testid="stSidebar"] .stButton > button {
+        width: 100%;
+        background: #302f2a;
+        color: #fffaf1;
+        border: 1px solid #5c584f;
+        border-radius: 10px;
+        font-weight: 700;
+    }
+    [data-testid="stSidebar"] .stButton > button:hover {
+        background: #444139;
+        color: #ffffff;
+        border-color: #8b8477;
+    }
+    [data-testid="stSidebar"] .stButton > button:focus {
+        color: #ffffff;
+        border-color: #d98365;
+        box-shadow: 0 0 0 2px rgba(217, 131, 101, .28);
+    }
+    [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+        background: #bb5b3d;
+        color: #ffffff;
+        border-color: #d17658;
+    }
+    [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+        background: #d06b4b;
+        color: #ffffff;
+        border-color: #e38b70;
+    }
+    [data-testid="stSidebar"] .stButton > button p {
+        color: inherit;
+    }
     .hero {
         padding: 1.2rem 0 1.4rem;
         border-bottom: 1px solid #d7d0c4;
@@ -91,8 +122,11 @@ APP_STYLES = """
 
 
 @st.cache_resource
-def get_agent() -> IGForecasterAgent:
-    return IGForecasterAgent()
+def get_agent() -> RemoteIGForecasterAgent:
+    load_dotenv()
+    return RemoteIGForecasterAgent(
+        server_url=os.getenv("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
+    )
 
 
 def _message_text(content) -> str:
@@ -117,15 +151,35 @@ def _as_list(value) -> list[str]:
     return [str(value)]
 
 
-def _status(agent: IGForecasterAgent) -> dict:
+def _gemini_is_configured() -> bool:
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    return bool(key and key != "your-gemini-api-key")
+
+
+def _status(agent: RemoteIGForecasterAgent) -> dict:
     service = agent.service
-    trends = service.load_saved_trends()
+    unavailable = 0
+
+    def count(loader) -> int:
+        nonlocal unavailable
+        try:
+            return len(loader())
+        except OSError:
+            unavailable += 1
+            return 0
+
+    try:
+        trends = service.load_saved_trends()
+    except OSError:
+        trends = None
+        unavailable += 1
     return {
-        "media": len(service.load_saved_media_analyses()),
-        "errors": len(service.load_saved_media_errors()),
-        "history": len(service.load_saved_historical_matches()),
+        "media": count(service.load_saved_media_analyses),
+        "errors": count(service.load_saved_media_errors),
+        "history": count(service.load_saved_historical_matches),
         "trends": len(trends.agent_signals) if trends is not None else 0,
-        "recommendations": len(service.load_saved_recommendations()),
+        "recommendations": count(service.load_saved_recommendations),
+        "unavailable": unavailable,
     }
 
 
@@ -178,23 +232,34 @@ def _render_recommendation_card(row: pd.Series) -> None:
             )
 
 
-def _render_chat(agent: IGForecasterAgent, thread_id: str) -> None:
+def _render_chat(agent: RemoteIGForecasterAgent, thread_id: str) -> None:
     st.subheader("Talk to your forecaster")
     st.caption("Ask for status, explanations, refreshes, or new recommendations.")
     snapshot = agent.get_state(thread_id=thread_id)
     messages = snapshot.values.get("messages", []) if snapshot.values else []
     for message in messages:
-        message_type = getattr(message, "type", "")
+        message_type = (
+            message.get("type", "")
+            if isinstance(message, dict)
+            else getattr(message, "type", "")
+        )
         if message_type not in {"human", "ai"}:
             continue
         role = "user" if message_type == "human" else "assistant"
         with st.chat_message(role):
-            st.markdown(_message_text(message.content))
+            content = (
+                message.get("content", "")
+                if isinstance(message, dict)
+                else message.content
+            )
+            st.markdown(_message_text(content))
 
     prompt = st.chat_input(
         "Ask about your content strategy…",
-        disabled=not bool(os.getenv("GEMINI_API_KEY")),
+        disabled=not _gemini_is_configured(),
     )
+    if not _gemini_is_configured():
+        st.caption("Add a real GEMINI_API_KEY to .env, then restart LangGraph and Streamlit.")
     if prompt:
         with st.status("The agent is working…", expanded=True) as status_box:
             status_box.write("Reviewing project context and deciding which tools are needed.")
@@ -208,7 +273,11 @@ def _render_chat(agent: IGForecasterAgent, thread_id: str) -> None:
         st.rerun()
 
 
-def _render_sidebar(agent: IGForecasterAgent, status: dict) -> None:
+def _render_sidebar(
+    agent: RemoteIGForecasterAgent,
+    status: dict,
+    thread_id: str,
+) -> None:
     with st.sidebar:
         st.markdown("## IG Forecaster")
         st.caption("Project control room")
@@ -222,23 +291,54 @@ def _render_sidebar(agent: IGForecasterAgent, status: dict) -> None:
         st.markdown("### Pipeline actions")
         if st.button("Analyze new media", use_container_width=True):
             with st.status("Analyzing media…"):
-                agent.service.analyze_media()
+                agent.run_workflow(
+                    thread_id=thread_id,
+                    force_media_refresh=True,
+                )
+                st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
+                    thread_id
+                )
             st.rerun()
         if st.button("Refresh Google Trends", use_container_width=True):
             with st.status("Refreshing trends…"):
-                agent.service.retrieve_trends(force_refresh=True)
+                agent.run_workflow(
+                    thread_id=thread_id,
+                    force_trend_refresh=True,
+                )
+                st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
+                    thread_id
+                )
             st.rerun()
         if st.button("Generate recommendations", type="primary", use_container_width=True):
             with st.status("Generating recommendations…"):
-                agent.service.generate_recommendations()
+                agent.run_workflow(
+                    thread_id=thread_id,
+                    force_recommendation_refresh=True,
+                )
+                st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
+                    thread_id
+                )
             st.rerun()
+
+        if st.session_state.get("last_workflow_thread_id"):
+            st.caption("Latest LangGraph workflow thread")
+            st.code(st.session_state.last_workflow_thread_id, language=None)
+            st.link_button(
+                "Open local LangGraph Studio",
+                "https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024",
+                use_container_width=True,
+            )
 
         st.divider()
         st.markdown("### Connections")
-        st.write("Gemini", "✓" if os.getenv("GEMINI_API_KEY") else "Missing key")
+        st.write("Gemini", "✓" if _gemini_is_configured() else "Missing key")
         st.write("LangSmith", "✓" if os.getenv("LANGSMITH_API_KEY") else "Not configured")
         if status["errors"]:
             st.warning(f"{status['errors']} media analysis errors")
+        if status.get("unavailable"):
+            st.warning(
+                f"{status['unavailable']} saved artifact sources are temporarily unavailable."
+            )
 
 
 def main() -> None:
@@ -248,7 +348,7 @@ def main() -> None:
 
     agent = get_agent()
     status = _status(agent)
-    _render_sidebar(agent, status)
+    _render_sidebar(agent, status, st.session_state.agent_thread_id)
 
     st.markdown(
         """

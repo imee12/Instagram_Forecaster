@@ -1,0 +1,9 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "dependencies": ["."],
+  "graphs": {
+    "ig_forecaster": "./src/ig_forecaster/agent/studio.py:graph",
+    "ig_forecaster_agent": "./src/ig_forecaster/agent/agent_studio.py:graph"
+  },
+  "env": ".env"
+}

@@ -8,6 +8,7 @@ dependencies = [
   "sentence-transformers",
   "transformers>=4.41,<5",
   "pydantic",
+  "python-dotenv>=1.0",
   "google-genai",
   "langsmith>=0.1.98",
   "langchain>=1.0",

@@ -4,9 +4,10 @@ import json
 from typing import Any
 
 import pandas as pd
-from langchain.tools import BaseTool, tool
+from langchain.tools import BaseTool, ToolRuntime, tool
 
 from ..pipeline import PipelineService
+from .workflow import ForecastWorkflow
 
 
 def _records(frame: pd.DataFrame, limit: int = 10) -> list[dict[str, Any]]:
@@ -37,7 +38,10 @@ def _artifact_status(service: PipelineService) -> dict[str, Any]:
     }
 
 
-def build_agent_tools(service: PipelineService) -> list[BaseTool]:
+def build_agent_tools(
+    service: PipelineService,
+    workflow: ForecastWorkflow | None = None,
+) -> list[BaseTool]:
     """Bind safe agent tools to one project-specific pipeline service."""
 
     @tool("get_project_status")
@@ -96,7 +100,7 @@ def build_agent_tools(service: PipelineService) -> list[BaseTool]:
             "recommendations": _records(recommendations),
         }
 
-    return [
+    tools = [
         get_project_status,
         analyze_project_media,
         retrieve_history,
@@ -104,3 +108,31 @@ def build_agent_tools(service: PipelineService) -> list[BaseTool]:
         generate_recommendations,
         get_saved_recommendations,
     ]
+
+    if workflow is not None:
+        @tool("run_forecast_workflow")
+        def run_forecast_workflow(
+            runtime: ToolRuntime,
+            force_media_refresh: bool = False,
+            force_trend_refresh: bool = False,
+            force_recommendation_refresh: bool = False,
+        ) -> dict[str, Any]:
+            """Run the cache-aware LangGraph forecasting workflow.
+
+            Use this when the user asks to run or update the full forecast.
+            Force refreshes only on explicit request.
+            """
+            thread_id = runtime.config.get("configurable", {}).get("thread_id")
+            if not thread_id:
+                raise ValueError("The LangGraph runtime has no thread_id.")
+            result = workflow.invoke(
+                thread_id=str(thread_id),
+                force_media_refresh=force_media_refresh,
+                force_trend_refresh=force_trend_refresh,
+                force_recommendation_refresh=force_recommendation_refresh,
+            )
+            return dict(result)
+
+        tools.append(run_forecast_workflow)
+
+    return tools

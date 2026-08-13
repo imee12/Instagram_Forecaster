@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import math
 from pathlib import Path
 from typing import Protocol, Sequence
+import warnings
 
 import pandas as pd
 from langsmith import traceable
@@ -299,14 +300,22 @@ def load_cached_trend_report(output_folder: Path) -> TrendReport | None:
     ):
         return None
 
-    interest = pd.read_csv(interest_path, parse_dates=["date"]).set_index("date")
-    interest.index.name = "date"
-    return TrendReport(
-        interest_over_time=interest,
-        related_queries=pd.read_csv(related_path),
-        keyword_momentum=pd.read_csv(momentum_path),
-        agent_signals=pd.read_csv(agent_signals_path),
-    )
+    try:
+        interest = pd.read_csv(interest_path, parse_dates=["date"]).set_index("date")
+        interest.index.name = "date"
+        return TrendReport(
+            interest_over_time=interest,
+            related_queries=pd.read_csv(related_path),
+            keyword_momentum=pd.read_csv(momentum_path),
+            agent_signals=pd.read_csv(agent_signals_path),
+        )
+    except (OSError, ValueError, pd.errors.ParserError) as exc:
+        warnings.warn(
+            f"Cached Google Trends files could not be read: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
 
 
 def trend_cache_is_fresh(
@@ -319,11 +328,15 @@ def trend_cache_is_fresh(
     if not all(path.exists() for path in paths):
         return False
 
-    newest_allowed_time = (now or datetime.now(timezone.utc)) - maximum_age
-    oldest_file_time = min(
-        datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc) for path in paths
-    )
-    return oldest_file_time >= newest_allowed_time
+    try:
+        newest_allowed_time = (now or datetime.now(timezone.utc)) - maximum_age
+        oldest_file_time = min(
+            datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            for path in paths
+        )
+        return oldest_file_time >= newest_allowed_time
+    except OSError:
+        return False
 
 
 def save_trend_report(report: TrendReport, output_folder: Path) -> tuple[Path, Path, Path, Path]:

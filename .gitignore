@@ -8,6 +8,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.ig_forecaster_cache/
+.langgraph_api/
 .mypy_cache/
 .ruff_cache/
 .coverage

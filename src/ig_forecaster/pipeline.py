@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import warnings
 
 import pandas as pd
 from google.genai import types
@@ -37,6 +39,7 @@ class ProjectArtifacts(BaseModel):
     trend_signals_path: Path
     recommendations_json_path: Path
     recommendations_csv_path: Path
+    local_trend_cache_folder: Path
 
 
 @dataclass
@@ -126,11 +129,31 @@ The media type is {media_type}.
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
     try:
+        if not path.exists():
+            return pd.DataFrame()
         return pd.read_csv(path)
-    except pd.errors.EmptyDataError:
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+        if isinstance(exc, OSError):
+            warnings.warn(
+                f"Saved artifact could not be read: {path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return pd.DataFrame()
+
+
+def _read_json_records(path: Path) -> pd.DataFrame:
+    try:
+        if not path.exists():
+            return pd.DataFrame()
+        return pd.DataFrame(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError) as exc:
+        warnings.warn(
+            f"Saved artifact could not be read: {path}: {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return pd.DataFrame()
 
 
@@ -142,6 +165,13 @@ class PipelineService:
         project_root = get_project_root(dataset_path=resolved_dataset_path)
         output_folder = get_output_folder(dataset_path=resolved_dataset_path)
         output_folder.mkdir(parents=True, exist_ok=True)
+        local_trend_cache_folder = Path(
+            os.getenv(
+                "IG_FORECASTER_LOCAL_CACHE",
+                str(Path.cwd() / ".ig_forecaster_cache"),
+            )
+        ).expanduser()
+        local_trend_cache_folder.mkdir(parents=True, exist_ok=True)
         self.artifacts = ProjectArtifacts(
             project_root=project_root,
             dataset_path=resolved_dataset_path,
@@ -154,6 +184,7 @@ class PipelineService:
             trend_signals_path=output_folder / "google_trends_agent_signals.csv",
             recommendations_json_path=output_folder / "post_recommendations.json",
             recommendations_csv_path=output_folder / "post_recommendations.csv",
+            local_trend_cache_folder=local_trend_cache_folder,
         )
         self._retrieval_runtime: tuple[object, pd.DataFrame, object] | None = None
 
@@ -163,8 +194,9 @@ class PipelineService:
 
     def load_saved_media_analyses(self) -> pd.DataFrame:
         path = self.artifacts.media_analyses_path
-        if path.exists():
-            return pd.DataFrame(json.loads(path.read_text(encoding="utf-8")))
+        analyses = _read_json_records(path)
+        if not analyses.empty:
+            return analyses
         cache = self._load_analysis_cache()
         return pd.DataFrame(cache.values())
 
@@ -175,19 +207,34 @@ class PipelineService:
         return _read_csv(self.artifacts.historical_matches_path)
 
     def load_saved_trends(self) -> TrendReport | None:
-        return load_cached_trend_report(self.artifacts.output_folder)
+        local_report = load_cached_trend_report(
+            self.artifacts.local_trend_cache_folder
+        )
+        if local_report is not None:
+            return local_report
+
+        report = load_cached_trend_report(self.artifacts.output_folder)
+        if report is not None:
+            save_trend_report(report, self.artifacts.local_trend_cache_folder)
+        return report
 
     def load_saved_recommendations(self) -> pd.DataFrame:
-        path = self.artifacts.recommendations_json_path
-        if not path.exists():
-            return pd.DataFrame()
-        return pd.DataFrame(json.loads(path.read_text(encoding="utf-8")))
+        return _read_json_records(self.artifacts.recommendations_json_path)
 
     def _load_analysis_cache(self) -> dict[str, dict]:
         path = self.artifacts.media_cache_path
-        if not path.exists():
+        try:
+            if not path.exists():
+                return {}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except (OSError, ValueError, TypeError) as exc:
+            warnings.warn(
+                f"Media analysis cache could not be read: {path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             return {}
-        return json.loads(path.read_text(encoding="utf-8"))
 
     def _save_media_results(
         self,
@@ -285,6 +332,7 @@ class PipelineService:
         try:
             report = retrieve_google_trends()
             save_trend_report(report, self.artifacts.output_folder)
+            save_trend_report(report, self.artifacts.local_trend_cache_folder)
             return report
         except Exception as exc:
             if cached is None:
