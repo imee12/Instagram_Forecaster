@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .. import config
 from .workflow_state import ForecastWorkflowState
 
 
@@ -37,3 +38,15 @@ def choose_next_stage(state: ForecastWorkflowState) -> str:
         return "generate_recommendations"
 
     return "complete"
+
+
+def choose_recommendation_mode(_: ForecastWorkflowState) -> str:
+    """Expose mock and real ToT execution as distinct LangGraph branches."""
+    return "dev_mock_tot" if config.DEV_MODE else "tot_plan"
+
+
+def continue_tot_or_error(
+    state: ForecastWorkflowState,
+    next_stage: str,
+) -> str:
+    return "handle_error" if state.get("errors") else next_stage

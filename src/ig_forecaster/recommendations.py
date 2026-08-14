@@ -9,6 +9,7 @@ from google.genai import types
 from langsmith import traceable
 from pydantic import BaseModel, Field
 
+from . import config
 from .gemini_client import MODEL_NAME, get_or_create_client
 from .trends import TrendReport
 
@@ -17,6 +18,7 @@ MAX_TREND_SIGNALS = 20
 MAX_HISTORICAL_MATCHES_PER_MEDIA = 3
 DEFAULT_CANDIDATE_COUNT = 6
 DEFAULT_RECOMMENDATION_COUNT = 3
+DEFAULT_THOUGHT_BRANCH_COUNT = 3
 SCORE_WEIGHTS = {
     "historical_performance": 0.30,
     "trend_alignment": 0.30,
@@ -53,7 +55,25 @@ class RecommendationCandidate(BaseModel):
 
 
 class RecommendationCandidates(BaseModel):
-    candidates: list[RecommendationCandidate] = Field(min_length=3, max_length=8)
+    candidates: list[RecommendationCandidate] = Field(min_length=1, max_length=8)
+
+
+class RecommendationThoughtBranch(BaseModel):
+    name: str = Field(description="Short label for this recommendation strategy.")
+    hypothesis: str = Field(
+        description="Concise, testable content strategy hypothesis; not hidden reasoning."
+    )
+    evidence_focus: list[str] = Field(
+        min_length=1,
+        description="Evidence dimensions this branch should prioritize.",
+    )
+    target_formats: list[Literal["reel", "carousel", "static_post", "story"]] = (
+        Field(min_length=1)
+    )
+
+
+class RecommendationThoughtBranches(BaseModel):
+    branches: list[RecommendationThoughtBranch] = Field(min_length=2, max_length=4)
 
 
 def _recommendation_trace_inputs(inputs: dict) -> dict:
@@ -69,6 +89,9 @@ def _recommendation_trace_inputs(inputs: dict) -> dict:
         "candidate_count": inputs.get("candidate_count", DEFAULT_CANDIDATE_COUNT),
         "recommendation_count": inputs.get(
             "recommendation_count", DEFAULT_RECOMMENDATION_COUNT
+        ),
+        "thought_branch_count": inputs.get(
+            "thought_branch_count", DEFAULT_THOUGHT_BRANCH_COUNT
         ),
     }
 
@@ -189,6 +212,212 @@ def _validate_evidence(
             )
 
 
+def _candidate_allocations(candidate_count: int, branch_count: int) -> list[int]:
+    base, remainder = divmod(candidate_count, branch_count)
+    return [base + (1 if index < remainder else 0) for index in range(branch_count)]
+
+
+@traceable(
+    name="ToT 1 - Plan Strategy Branches",
+    run_type="chain",
+    tags=["tree-of-thoughts", "planning"],
+)
+def _plan_thought_branches(
+    client,
+    media_context: list[dict],
+    historical_context: list[dict],
+    trend_context: list[dict],
+    branch_count: int,
+) -> list[RecommendationThoughtBranch]:
+    prompt = f"""
+You are planning a bounded Tree-of-Thoughts search for Instagram content
+recommendations for a young singer, actor, and fashion performer.
+
+Create exactly {branch_count} distinct strategy branches. Each branch must be a
+concise, testable hypothesis with a different evidence emphasis or creative
+format. Do not provide hidden chain-of-thought. Do not invent facts. Return only
+the structured branch plans.
+
+MEDIA ANALYSES:
+{json.dumps(media_context, indent=2)}
+
+SIMILAR HISTORICAL POSTS:
+{json.dumps(historical_context, indent=2)}
+
+RANKED GOOGLE TREND SIGNALS:
+{json.dumps(trend_context, indent=2)}
+"""
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=RecommendationThoughtBranches,
+            temperature=0.45,
+        ),
+    )
+    parsed = response.parsed
+    if parsed is None:
+        raise ValueError("Gemini returned no recommendation thought branches.")
+    if len(parsed.branches) != branch_count:
+        raise ValueError(
+            f"Gemini returned {len(parsed.branches)} branches; expected {branch_count}."
+        )
+    return parsed.branches
+
+
+@traceable(
+    name="ToT 2 - Expand Thought Branch",
+    run_type="chain",
+    tags=["tree-of-thoughts", "expansion"],
+)
+def _expand_thought_branch(
+    client,
+    branch: RecommendationThoughtBranch,
+    candidate_count: int,
+    media_context: list[dict],
+    historical_context: list[dict],
+    trend_context: list[dict],
+) -> list[RecommendationCandidate]:
+    prompt = f"""
+Expand this strategy branch into exactly {candidate_count} distinct Instagram
+post candidates for a young singer, actor, and fashion performer.
+
+STRATEGY BRANCH:
+{branch.model_dump_json(indent=2)}
+
+Use only the supplied facts and evidence. Do not invent media, historical
+results, trend topics, events, songs, locations, partnerships, or backstory.
+Every candidate must select one exact media file, cite at least one exact trend
+topic and historical post_id, contain practical execution guidance, and score
+the four evidence dimensions from 0 to 100. Return structured candidates only;
+do not provide hidden chain-of-thought.
+
+MEDIA ANALYSES:
+{json.dumps(media_context, indent=2)}
+
+SIMILAR HISTORICAL POSTS:
+{json.dumps(historical_context, indent=2)}
+
+RANKED GOOGLE TREND SIGNALS:
+{json.dumps(trend_context, indent=2)}
+"""
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=RecommendationCandidates,
+            temperature=0.35,
+        ),
+    )
+    parsed = response.parsed
+    if parsed is None:
+        raise ValueError(f"Gemini returned no candidates for branch {branch.name!r}.")
+    if len(parsed.candidates) != candidate_count:
+        raise ValueError(
+            f"Gemini returned {len(parsed.candidates)} candidates for branch "
+            f"{branch.name!r}; expected {candidate_count}."
+        )
+    return parsed.candidates
+
+
+@traceable(
+    name="ToT 3 - Validate, Score, and Prune Candidates",
+    run_type="chain",
+    tags=["tree-of-thoughts", "evaluation", "pruning"],
+)
+def _rank_thought_candidates(
+    expanded: list[tuple[RecommendationThoughtBranch, RecommendationCandidate]],
+    media_context: list[dict],
+    historical_context: list[dict],
+    trend_context: list[dict],
+    recommendation_count: int,
+) -> pd.DataFrame:
+    """Validate grounded evidence, score candidates, and retain the best leaves."""
+    _validate_evidence(
+        [candidate for _, candidate in expanded],
+        media_context,
+        historical_context,
+        trend_context,
+    )
+    records = []
+    for branch, candidate in expanded:
+        record = candidate.model_dump()
+        scores = record.pop("scores")
+        record.update({f"{key}_score": value for key, value in scores.items()})
+        record["overall_score"] = _overall_score(candidate.scores)
+        record["thought_branch"] = branch.name
+        record["branch_hypothesis"] = branch.hypothesis
+        records.append(record)
+
+    recommendations = (
+        pd.DataFrame(records)
+        .sort_values(["overall_score", "confidence"], ascending=False)
+        .head(recommendation_count)
+        .reset_index(drop=True)
+    )
+    recommendations.insert(0, "rank", range(1, len(recommendations) + 1))
+    return recommendations
+
+
+@traceable(
+    name="DEV MODE - Mock ToT Recommendations",
+    run_type="chain",
+    tags=["tree-of-thoughts", "development-mode", "mock"],
+)
+def _generate_mock_tot_recommendations(
+    media_context: list[dict],
+    historical_context: list[dict],
+    trend_context: list[dict],
+    recommendation_count: int,
+) -> pd.DataFrame:
+    """Build deterministic, evidence-grounded stand-ins for Gemini ToT output."""
+    media_files = [str(item["file_name"]) for item in media_context]
+    trend_topics = [str(item["topic"]) for item in trend_context]
+    historical_ids = [
+        str(item["post_id"])
+        for item in historical_context
+        if item.get("post_id") is not None
+    ]
+    formats = ["reel", "carousel", "story", "static_post"]
+    expanded = []
+    for index in range(recommendation_count):
+        branch = RecommendationThoughtBranch(
+            name=f"Development mock branch {index + 1}",
+            hypothesis="Validate the recommendation workflow with saved project evidence.",
+            evidence_focus=["workflow integration", "trace visibility"],
+            target_formats=[formats[index % len(formats)]],
+        )
+        candidate = RecommendationCandidate(
+            media_file=media_files[index % len(media_files)],
+            post_format=formats[index % len(formats)],
+            concept=f"Development recommendation {index + 1}",
+            hook="A development-mode preview grounded in the current project artifacts.",
+            caption_direction="Replace this mock copy when running with DEV_MODE=false.",
+            rationale="This deterministic result exercises the pipeline without Gemini ToT calls.",
+            execution_notes=["Use this output to validate LangGraph, LangSmith, and the UI."],
+            supporting_trends=[trend_topics[index % len(trend_topics)]],
+            historical_post_ids=[historical_ids[index % len(historical_ids)]],
+            scores=RecommendationScores(
+                historical_performance=75 - index,
+                trend_alignment=75 - index,
+                media_quality=75 - index,
+                audience_fit=75 - index,
+            ),
+            confidence=75 - index,
+        )
+        expanded.append((branch, candidate))
+
+    return _rank_thought_candidates(
+        expanded,
+        media_context,
+        historical_context,
+        trend_context,
+        recommendation_count,
+    )
+
+
 @traceable(
     name="Generate Content Recommendations",
     run_type="chain",
@@ -203,83 +432,58 @@ def generate_content_recommendations(
     client_instance=None,
     candidate_count: int = DEFAULT_CANDIDATE_COUNT,
     recommendation_count: int = DEFAULT_RECOMMENDATION_COUNT,
+    thought_branch_count: int = DEFAULT_THOUGHT_BRANCH_COUNT,
 ) -> pd.DataFrame:
     if candidate_count < recommendation_count:
         raise ValueError("candidate_count cannot be smaller than recommendation_count.")
+    if not 2 <= thought_branch_count <= 4:
+        raise ValueError("thought_branch_count must be between 2 and 4.")
+    if thought_branch_count > candidate_count:
+        raise ValueError("thought_branch_count cannot exceed candidate_count.")
 
     media_context, historical_context, trend_context = _prepare_context(
         media_analyses,
         historical_matches,
         trend_report,
     )
-    prompt = f"""
-You are selecting high-probability content recommendations for a young singer,
-actor, and fashion performer.
-
-Generate exactly {candidate_count} distinct candidate posts. Use only the facts
-and evidence supplied below. Do not invent media, historical results, trend
-topics, events, songs, locations, partnerships, or backstory.
-
-Each candidate must:
-- select one exact media file
-- cite at least one exact trend topic
-- cite at least one exact historical post_id as a string
-- contain a practical hook, caption direction, and execution notes
-- score historical performance, trend alignment, media quality, and audience fit
-  from 0 to 100
-- use score differences that are justified by the supplied evidence
-- vary the concepts and formats where the available media supports variety
-
-MEDIA ANALYSES:
-{json.dumps(media_context, indent=2)}
-
-SIMILAR HISTORICAL POSTS:
-{json.dumps(historical_context, indent=2)}
-
-RANKED GOOGLE TREND SIGNALS:
-{json.dumps(trend_context, indent=2)}
-"""
-
-    client = client_instance or get_or_create_client()
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=RecommendationCandidates,
-            temperature=0.35,
-        ),
-    )
-    parsed = response.parsed
-    if parsed is None:
-        raise ValueError("Gemini returned no structured content recommendations.")
-    if len(parsed.candidates) != candidate_count:
-        raise ValueError(
-            f"Gemini returned {len(parsed.candidates)} candidates; expected {candidate_count}."
+    if config.DEV_MODE:
+        print("[IG Forecaster] DEV_MODE=true: using mock ToT recommendation output.")
+        return _generate_mock_tot_recommendations(
+            media_context,
+            historical_context,
+            trend_context,
+            recommendation_count,
         )
 
-    _validate_evidence(
-        parsed.candidates,
+    print("[IG Forecaster] DEV_MODE=false: using real Gemini ToT calls.")
+    client = client_instance or get_or_create_client()
+    branches = _plan_thought_branches(
+        client,
         media_context,
         historical_context,
         trend_context,
+        thought_branch_count,
     )
-    records = []
-    for candidate in parsed.candidates:
-        record = candidate.model_dump()
-        scores = record.pop("scores")
-        record.update({f"{key}_score": value for key, value in scores.items()})
-        record["overall_score"] = _overall_score(candidate.scores)
-        records.append(record)
+    allocations = _candidate_allocations(candidate_count, thought_branch_count)
+    expanded: list[tuple[RecommendationThoughtBranch, RecommendationCandidate]] = []
+    for branch, allocation in zip(branches, allocations):
+        candidates = _expand_thought_branch(
+            client,
+            branch,
+            allocation,
+            media_context,
+            historical_context,
+            trend_context,
+        )
+        expanded.extend((branch, candidate) for candidate in candidates)
 
-    recommendations = (
-        pd.DataFrame(records)
-        .sort_values(["overall_score", "confidence"], ascending=False)
-        .head(recommendation_count)
-        .reset_index(drop=True)
+    return _rank_thought_candidates(
+        expanded,
+        media_context,
+        historical_context,
+        trend_context,
+        recommendation_count,
     )
-    recommendations.insert(0, "rank", range(1, len(recommendations) + 1))
-    return recommendations
 
 
 def save_content_recommendations(

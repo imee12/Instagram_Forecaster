@@ -6,7 +6,22 @@ from typing import Any
 
 from langsmith import traceable
 
+from .. import config
+from ..gemini_client import get_or_create_client
 from ..pipeline import PipelineService
+from ..recommendations import (
+    DEFAULT_CANDIDATE_COUNT,
+    DEFAULT_RECOMMENDATION_COUNT,
+    DEFAULT_THOUGHT_BRANCH_COUNT,
+    RecommendationCandidate,
+    RecommendationThoughtBranch,
+    _candidate_allocations,
+    _expand_thought_branch,
+    _plan_thought_branches,
+    _prepare_context,
+    _rank_thought_candidates,
+    save_content_recommendations,
+)
 from .workflow_state import ForecastWorkflowState
 
 
@@ -167,8 +182,14 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
         except Exception as exc:
             return _failure("Google Trends retrieval", exc)
 
-    @traceable(name="Workflow Generate Recommendations", run_type="chain")
+    @traceable(name="Select Recommendation Execution Mode", run_type="chain")
     def generate_recommendations(state: ForecastWorkflowState) -> dict[str, Any]:
+        mode = "mock" if config.DEV_MODE else "real_gemini_tot"
+        print(f"[IG Forecaster] Recommendation graph mode: {mode}.")
+        return {"current_stage": "recommendation_mode_selected"}
+
+    @traceable(name="DEV MODE - Mock ToT Graph Node", run_type="chain")
+    def dev_mock_tot(state: ForecastWorkflowState) -> dict[str, Any]:
         try:
             recommendations = service.generate_recommendations()
             if recommendations.empty:
@@ -181,6 +202,98 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
             }
         except Exception as exc:
             return _failure("recommendation generation", exc)
+
+    @traceable(name="ToT 1 - Plan Strategy Branches Graph Node", run_type="chain")
+    def tot_plan(state: ForecastWorkflowState) -> dict[str, Any]:
+        try:
+            print("[IG Forecaster] DEV_MODE=false: running real Gemini ToT graph nodes.")
+            media_context, historical_context, trend_context = _prepare_context(
+                service.load_saved_media_analyses(),
+                service.load_saved_historical_matches(),
+                service.load_saved_trends(),
+            )
+            branches = _plan_thought_branches(
+                get_or_create_client(),
+                media_context,
+                historical_context,
+                trend_context,
+                DEFAULT_THOUGHT_BRANCH_COUNT,
+            )
+            return {
+                "tot_media_context": media_context,
+                "tot_historical_context": historical_context,
+                "tot_trend_context": trend_context,
+                "tot_branches": [branch.model_dump() for branch in branches],
+                "current_stage": "tot_planned",
+            }
+        except Exception as exc:
+            return _failure("ToT planning", exc)
+
+    @traceable(name="ToT 2 - Expand Thought Branches Graph Node", run_type="chain")
+    def tot_expand(state: ForecastWorkflowState) -> dict[str, Any]:
+        try:
+            branches = [
+                RecommendationThoughtBranch.model_validate(item)
+                for item in state["tot_branches"]
+            ]
+            allocations = _candidate_allocations(
+                DEFAULT_CANDIDATE_COUNT,
+                len(branches),
+            )
+            expanded = []
+            client = get_or_create_client()
+            for branch, allocation in zip(branches, allocations):
+                candidates = _expand_thought_branch(
+                    client,
+                    branch,
+                    allocation,
+                    state["tot_media_context"],
+                    state["tot_historical_context"],
+                    state["tot_trend_context"],
+                )
+                expanded.extend(
+                    {
+                        "branch": branch.model_dump(),
+                        "candidate": candidate.model_dump(),
+                    }
+                    for candidate in candidates
+                )
+            return {
+                "tot_expanded_candidates": expanded,
+                "current_stage": "tot_expanded",
+            }
+        except Exception as exc:
+            return _failure("ToT expansion", exc)
+
+    @traceable(name="ToT 3 - Score and Prune Graph Node", run_type="chain")
+    def tot_rank(state: ForecastWorkflowState) -> dict[str, Any]:
+        try:
+            expanded = [
+                (
+                    RecommendationThoughtBranch.model_validate(item["branch"]),
+                    RecommendationCandidate.model_validate(item["candidate"]),
+                )
+                for item in state["tot_expanded_candidates"]
+            ]
+            recommendations = _rank_thought_candidates(
+                expanded,
+                state["tot_media_context"],
+                state["tot_historical_context"],
+                state["tot_trend_context"],
+                DEFAULT_RECOMMENDATION_COUNT,
+            )
+            save_content_recommendations(
+                recommendations,
+                service.artifacts.output_folder,
+            )
+            return {
+                "recommendations_ready": True,
+                "recommendations_generated": True,
+                "recommendation_count": len(recommendations),
+                "current_stage": "recommendations_complete",
+            }
+        except Exception as exc:
+            return _failure("ToT scoring and pruning", exc)
 
     @traceable(name="Handle Forecast Workflow Error", run_type="chain")
     def handle_error(state: ForecastWorkflowState) -> dict[str, Any]:
@@ -199,6 +312,10 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
         "retrieve_history": retrieve_history,
         "retrieve_trends": retrieve_trends,
         "generate_recommendations": generate_recommendations,
+        "dev_mock_tot": dev_mock_tot,
+        "tot_1_plan": tot_plan,
+        "tot_2_expand": tot_expand,
+        "tot_3_rank": tot_rank,
         "handle_error": handle_error,
         "complete": complete,
     }

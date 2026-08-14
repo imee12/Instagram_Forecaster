@@ -14,6 +14,24 @@ COLAB_PROJECT_ROOT = Path("/content/drive/MyDrive/Colab Notebooks/IG_Forecaster"
 DEFAULT_PROJECT_ROOT = PROJECT_ROOT
 
 
+def _environment_bool(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{name} must be one of: true, false, 1, 0, yes, no, on, off."
+    )
+
+
+# Read once at process startup. Restart LangGraph after changing this value.
+DEV_MODE: bool = _environment_bool("DEV_MODE")
+
+
 def ensure_google_drive_mount() -> None:
     mount_google_drive()
 

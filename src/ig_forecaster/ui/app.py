@@ -200,6 +200,9 @@ def _render_recommendation_card(row: pd.Series) -> None:
                 · {escape(str(row.get('media_file', 'No media selected')))}
                 · <span class="score">{score:.1f} score</span>
             </div>
+            <div class="recommendation-meta">
+                Strategy: {escape(str(row.get('thought_branch', 'Evidence-ranked candidate')))}
+            </div>
             <strong>Hook</strong><br>{escape(str(row.get('hook', '')))}<br><br>
             <strong>Why it works</strong><br>{escape(str(row.get('rationale', '')))}<br>
             <div style="margin-top:.65rem">{pills}</div>
@@ -208,6 +211,9 @@ def _render_recommendation_card(row: pd.Series) -> None:
         unsafe_allow_html=True,
     )
     with st.expander(f"Execution details for recommendation {rank}"):
+        if row.get("branch_hypothesis"):
+            st.caption("Tree-of-Thoughts branch hypothesis")
+            st.write(row.get("branch_hypothesis"))
         st.write(row.get("caption_direction", ""))
         notes = _as_list(row.get("execution_notes"))
         if notes:

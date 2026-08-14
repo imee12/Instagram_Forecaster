@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 
 class ForecastWorkflowState(TypedDict, total=False):
@@ -26,6 +26,12 @@ class ForecastWorkflowState(TypedDict, total=False):
     historical_match_count: int
     trend_signal_count: int
     recommendation_count: int
+
+    tot_media_context: list[dict[str, Any]]
+    tot_historical_context: list[dict[str, Any]]
+    tot_trend_context: list[dict[str, Any]]
+    tot_branches: list[dict[str, Any]]
+    tot_expanded_candidates: list[dict[str, Any]]
 
     media_analysis_path: str
     historical_matches_path: str

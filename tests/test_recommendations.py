@@ -3,10 +3,13 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from ig_forecaster import config
 from ig_forecaster.recommendations import (
     RecommendationCandidate,
     RecommendationCandidates,
     RecommendationScores,
+    RecommendationThoughtBranch,
+    RecommendationThoughtBranches,
     generate_content_recommendations,
     save_content_recommendations,
 )
@@ -21,11 +24,29 @@ class FakeResponse:
 class FakeModels:
     def __init__(self, parsed):
         self.parsed = parsed
+        self.candidate_index = 0
 
     def generate_content(self, **kwargs):
         assert "MEDIA ANALYSES" in kwargs["contents"]
-        assert kwargs["config"].response_schema is RecommendationCandidates
-        return FakeResponse(self.parsed)
+        schema = kwargs["config"].response_schema
+        if schema is RecommendationThoughtBranches:
+            return FakeResponse(
+                RecommendationThoughtBranches(
+                    branches=[
+                        RecommendationThoughtBranch(
+                            name=f"Branch {number}",
+                            hypothesis=f"Test strategy {number}",
+                            evidence_focus=["historical performance"],
+                            target_formats=["reel"],
+                        )
+                        for number in range(3)
+                    ]
+                )
+            )
+        assert schema is RecommendationCandidates
+        candidate = self.parsed.candidates[self.candidate_index]
+        self.candidate_index += 1
+        return FakeResponse(RecommendationCandidates(candidates=[candidate]))
 
 
 class FakeClient:
@@ -144,6 +165,7 @@ def test_generate_content_recommendations_scores_and_ranks_candidates():
     assert recommendations.iloc[0]["concept"] == "Best candidate"
     assert recommendations["rank"].tolist() == [1, 2, 3]
     assert recommendations.iloc[0]["overall_score"] == pytest.approx(86)
+    assert recommendations.iloc[0]["thought_branch"] == "Branch 1"
 
 
 def test_recommendations_reject_unknown_evidence():
@@ -170,6 +192,34 @@ def test_recommendations_reject_unknown_evidence():
             client_instance=FakeClient(RecommendationCandidates(candidates=candidates)),
             candidate_count=3,
         )
+
+
+def test_dev_mode_uses_mock_recommendations_without_gemini(monkeypatch):
+    media, historical, report = recommendation_context()
+
+    class FailIfCalledClient:
+        @property
+        def models(self):
+            raise AssertionError("Gemini must not be called in development mode")
+
+    monkeypatch.setattr(config, "DEV_MODE", True)
+    recommendations = generate_content_recommendations(
+        media,
+        historical,
+        report,
+        client_instance=FailIfCalledClient(),
+        recommendation_count=3,
+    )
+
+    assert len(recommendations) == 3
+    assert recommendations["concept"].tolist() == [
+        "Development recommendation 1",
+        "Development recommendation 2",
+        "Development recommendation 3",
+    ]
+    assert recommendations["thought_branch"].str.startswith(
+        "Development mock branch"
+    ).all()
 
 
 def test_save_content_recommendations_writes_json_and_csv(tmp_path):

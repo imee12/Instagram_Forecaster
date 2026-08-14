@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from ig_forecaster.config import PROJECT_ROOT, get_media_folder, get_project_root
+from ig_forecaster.config import (
+    PROJECT_ROOT,
+    _environment_bool,
+    get_media_folder,
+    get_project_root,
+)
 
 
 def test_project_root_points_to_google_drive_desktop():
@@ -31,3 +36,11 @@ def test_get_media_folder_uses_explicit_drive_override(tmp_path, monkeypatch):
     monkeypatch.setenv("IG_FORECASTER_MEDIA_FOLDER", str(media_folder))
 
     assert get_media_folder() == media_folder
+
+
+def test_environment_bool_parses_development_mode(monkeypatch):
+    monkeypatch.setenv("DEV_MODE", "true")
+    assert _environment_bool("DEV_MODE") is True
+
+    monkeypatch.setenv("DEV_MODE", "false")
+    assert _environment_bool("DEV_MODE") is False

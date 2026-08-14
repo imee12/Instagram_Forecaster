@@ -9,7 +9,11 @@ from langgraph.graph import END, START, StateGraph
 
 from ..pipeline import PipelineService
 from .workflow_nodes import build_workflow_nodes
-from .workflow_routes import choose_next_stage
+from .workflow_routes import (
+    choose_next_stage,
+    choose_recommendation_mode,
+    continue_tot_or_error,
+)
 from .workflow_state import ForecastWorkflowState
 
 
@@ -43,9 +47,28 @@ def build_forecast_workflow(
         "analyze_media",
         "retrieve_history",
         "retrieve_trends",
-        "generate_recommendations",
     ):
         builder.add_edge(stage, "inspect_project")
+    builder.add_conditional_edges(
+        "generate_recommendations",
+        choose_recommendation_mode,
+        {
+            "dev_mock_tot": "dev_mock_tot",
+            "tot_plan": "tot_1_plan",
+        },
+    )
+    builder.add_edge("dev_mock_tot", "inspect_project")
+    builder.add_conditional_edges(
+        "tot_1_plan",
+        lambda state: continue_tot_or_error(state, "tot_expand"),
+        {"tot_expand": "tot_2_expand", "handle_error": "handle_error"},
+    )
+    builder.add_conditional_edges(
+        "tot_2_expand",
+        lambda state: continue_tot_or_error(state, "tot_rank"),
+        {"tot_rank": "tot_3_rank", "handle_error": "handle_error"},
+    )
+    builder.add_edge("tot_3_rank", "inspect_project")
     builder.add_edge("handle_error", END)
     builder.add_edge("complete", END)
     return builder.compile(checkpointer=checkpointer)

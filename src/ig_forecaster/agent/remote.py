@@ -61,6 +61,12 @@ class RemoteIGForecasterAgent:
             thread_id,
             "ig_forecaster_agent",
             input=state,
+            metadata={
+                "source": "streamlit",
+                "kind": "chat",
+                "conversation_thread_id": thread_id,
+                "user_message": message,
+            },
         )
 
     def get_state(self, *, thread_id: str):

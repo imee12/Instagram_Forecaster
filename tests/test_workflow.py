@@ -2,8 +2,12 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from ig_forecaster import config
 from ig_forecaster.agent.workflow import ForecastWorkflow
-from ig_forecaster.agent.workflow_routes import choose_next_stage
+from ig_forecaster.agent.workflow_routes import (
+    choose_next_stage,
+    choose_recommendation_mode,
+)
 
 
 def test_route_runs_missing_stages_in_dependency_order():
@@ -82,7 +86,8 @@ class FakeWorkflowService:
         return self.recommendations
 
 
-def test_workflow_runs_all_stages_and_finishes():
+def test_workflow_runs_all_stages_and_finishes(monkeypatch):
+    monkeypatch.setattr(config, "DEV_MODE", True)
     service = FakeWorkflowService()
 
     result = ForecastWorkflow(service).invoke(thread_id="test-thread")
@@ -97,6 +102,22 @@ def test_workflow_runs_all_stages_and_finishes():
         ("trends", False),
         ("recommendations", False),
     ]
+
+
+def test_recommendation_modes_and_tot_nodes_are_visible(monkeypatch):
+    service = FakeWorkflowService()
+    graph = ForecastWorkflow(service).graph.get_graph()
+
+    assert {
+        "dev_mock_tot",
+        "tot_1_plan",
+        "tot_2_expand",
+        "tot_3_rank",
+    }.issubset(graph.nodes)
+    monkeypatch.setattr(config, "DEV_MODE", True)
+    assert choose_recommendation_mode({}) == "dev_mock_tot"
+    monkeypatch.setattr(config, "DEV_MODE", False)
+    assert choose_recommendation_mode({}) == "tot_plan"
 
 
 def test_workflow_reuses_complete_artifacts():
