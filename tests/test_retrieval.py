@@ -85,6 +85,21 @@ def test_retrieve_similar_posts_returns_ranked_metadata(monkeypatch):
     assert results.iloc[0]["similarity_score"] == pytest.approx(0.91)
 
 
+def test_retrieve_similar_posts_filters_weak_matches(monkeypatch):
+    monkeypatch.setattr("ig_forecaster.retrieval._require_runtime_dependencies", lambda: None)
+
+    results = retrieve_similar_posts(
+        "stage rehearsal",
+        FakeIndex(),
+        historical_posts(),
+        FakeEmbeddingModel(),
+        top_k=2,
+        min_similarity=0.8,
+    )
+
+    assert results["post_id"].tolist() == [2]
+
+
 def test_retrieve_historical_matches_identifies_source_media(monkeypatch):
     monkeypatch.setattr("ig_forecaster.retrieval._require_runtime_dependencies", lambda: None)
     analyses = pd.DataFrame(
@@ -111,3 +126,5 @@ def test_retrieve_historical_matches_identifies_source_media(monkeypatch):
 
     assert len(results) == 2
     assert results["media_file"].unique().tolist() == ["rehearsal.mov"]
+    assert results["historical_evidence_mode"].unique().tolist() == ["sparse"]
+    assert results["historical_index_size"].unique().tolist() == [2]

@@ -18,6 +18,23 @@ from .data import load_posts
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 DEFAULT_TOP_K = 3
+DEFAULT_MIN_SIMILARITY = 0.35
+MIN_HEALTHY_INDEX_POSTS = 10
+MIN_HEALTHY_MATCHES_PER_MEDIA = 2
+
+
+class EmptyHistoricalIndex:
+    """No-op index used while a project has no historical posts."""
+
+    ntotal = 0
+    d = 0
+
+    def search(self, queries: object, top_k: int) -> tuple[object, object]:
+        query_count = len(queries)
+        return (
+            np.empty((query_count, 0), dtype="float32"),
+            np.empty((query_count, 0), dtype="int64"),
+        )
 
 
 class NumpyFlatIPIndex:
@@ -65,6 +82,7 @@ def _search_trace_inputs(inputs: dict) -> dict:
     return {
         "query_text": inputs.get("query_text"),
         "top_k": inputs.get("top_k", DEFAULT_TOP_K),
+        "min_similarity": inputs.get("min_similarity", DEFAULT_MIN_SIMILARITY),
     }
 
 
@@ -115,6 +133,9 @@ def build_or_load_index(posts: pd.DataFrame | None = None, index_folder: Path | 
     metadata_path = index_folder / "historical_posts_metadata.csv"
 
     posts = posts if posts is not None else load_posts()
+
+    if posts.empty:
+        return EmptyHistoricalIndex(), posts.copy(), None
 
     if embeddings_path.exists() and metadata_path.exists():
         embedding_model = sentence_transformer(EMBEDDING_MODEL_NAME)
@@ -170,12 +191,15 @@ def retrieve_similar_posts(
     embedding_model: object,
     *,
     top_k: int = DEFAULT_TOP_K,
+    min_similarity: float = DEFAULT_MIN_SIMILARITY,
 ) -> pd.DataFrame:
     _require_runtime_dependencies()
     if not query_text.strip():
         raise ValueError("Historical retrieval query cannot be empty.")
     if top_k < 1:
         raise ValueError("top_k must be at least 1.")
+    if not -1 <= min_similarity <= 1:
+        raise ValueError("min_similarity must be between -1 and 1.")
     if metadata.empty:
         return pd.DataFrame(columns=["retrieval_rank", "similarity_score", *metadata.columns])
 
@@ -198,6 +222,8 @@ def retrieve_similar_posts(
     for rank, (position, score) in enumerate(zip(positions[0], scores[0]), start=1):
         if position < 0 or position >= len(metadata):
             continue
+        if float(score) < min_similarity:
+            continue
         record = metadata.iloc[int(position)].to_dict()
         record["retrieval_rank"] = rank
         record["similarity_score"] = round(float(score), 6)
@@ -215,6 +241,7 @@ def retrieve_historical_matches(
     embedding_model: object,
     *,
     top_k: int = DEFAULT_TOP_K,
+    min_similarity: float = DEFAULT_MIN_SIMILARITY,
 ) -> pd.DataFrame:
     match_frames = []
     for analysis in media_analyses.to_dict(orient="records"):
@@ -224,13 +251,34 @@ def retrieve_historical_matches(
             metadata,
             embedding_model,
             top_k=top_k,
+            min_similarity=min_similarity,
         )
         matches.insert(0, "media_file", analysis.get("file_name"))
         matches.insert(1, "media_path", analysis.get("file_path"))
         match_frames.append(matches)
 
     if not match_frames:
-        return pd.DataFrame(
+        results = pd.DataFrame(
             columns=["media_file", "media_path", "retrieval_rank", "similarity_score"]
         )
-    return pd.concat(match_frames, ignore_index=True)
+    else:
+        results = pd.concat(match_frames, ignore_index=True)
+
+    index_size = len(metadata)
+    if index_size == 0 or results.empty:
+        mode = "cold_start"
+    else:
+        matches_per_media = results.groupby("media_file").size()
+        every_media_has_support = (
+            len(matches_per_media) == len(media_analyses)
+            and matches_per_media.min() >= MIN_HEALTHY_MATCHES_PER_MEDIA
+        )
+        mode = (
+            "healthy"
+            if index_size >= MIN_HEALTHY_INDEX_POSTS and every_media_has_support
+            else "sparse"
+        )
+
+    results["historical_index_size"] = index_size
+    results["historical_evidence_mode"] = mode
+    return results

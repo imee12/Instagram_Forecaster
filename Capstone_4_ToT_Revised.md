@@ -88,7 +88,7 @@ The expansion stage distributes six recommendation candidates across the three s
 - Rationale
 - Execution notes
 - Supporting trend topics
-- Supporting historical post identifiers
+- Supporting historical post identifiers when reliable matches are available
 - Four evaluation scores
 - Confidence score
 
@@ -96,7 +96,7 @@ The prompts instruct Gemini to use only the supplied evidence and not invent med
 
 ### Termination and final selection
 
-The search terminates after depth 2 because every surviving thought is then a complete recommendation candidate. It also terminates with an error if required evidence is missing, Gemini fails to return the required structured output, or deterministic evidence validation fails. On successful completion, the controller ranks all valid complete candidates and selects the top three.
+The search terminates after depth 2 because every surviving thought is then a complete recommendation candidate. It terminates with an error if media or trend evidence is missing, Gemini fails to return the required structured output, or deterministic evidence validation fails. A missing or sparse historical index activates a fallback scoring mode instead of terminating the workflow. On successful completion, the controller ranks all valid complete candidates and selects the top three.
 
 ### Validation, scoring, and pruning
 
@@ -128,6 +128,16 @@ overall_score =
 ```
 
 Candidates are sorted by overall score and then confidence. The top three are retained as the final recommendations. This final ranking is the pruning step in the bounded search.
+
+Historical weight adapts to the quality of the vector index:
+
+| Historical mode | Historical | Trends | Media quality | Audience fit |
+|---|---:|---:|---:|---:|
+| Healthy | 30% | 30% | 20% | 20% |
+| Sparse | 15% | 36.43% | 24.29% | 24.29% |
+| Cold start | 0% | 42.86% | 28.57% | 28.57% |
+
+The removed historical weight is redistributed proportionally across the other three criteria. This prevents a new or weak historical index from having the same influence as mature evidence.
 
 ## Search and evaluation strategy
 
@@ -194,7 +204,7 @@ The implementation uses structural and ranking thresholds rather than an arbitra
 - Missing required fields, unsupported formats, or scores outside 0–100 fail Pydantic validation.
 - A model response with the wrong number of strategy branches or candidates fails the stage.
 - After validation, the beam-width threshold retains only three candidates; every candidate ranked fourth or lower is pruned.
-- Missing prerequisite media analyses, historical matches, or trend signals stops recommendation generation and routes the workflow to error handling.
+- Missing media analyses or trend signals stops recommendation generation and routes the workflow to error handling. Missing historical matches activates cold-start mode instead.
 - Gemini API errors, including quota exhaustion, stop the real ToT path and are captured in the LangGraph/LangSmith trace.
 
 ### Tie resolution and selection policy
@@ -209,6 +219,16 @@ The top three rows after this reranking are selected. If both overall score and 
 ### Compute, latency, and cost constraints
 
 The search is constrained to three strategy branches, six complete candidates, and three final recommendations. A normal real-mode run uses one Gemini planning request and three expansion requests. Media analysis, historical retrieval, and trend retrieval are completed before the search and are not repeated inside each branch. These limits cap branching, latency, and model usage—an important constraint because the development API project has a small request quota. `DEV_MODE=true` provides a zero-Gemini mock path for testing graph routing, tracing, artifact saving, and UI behavior.
+
+### Sparse-index and cold-start handling
+
+The historical retrieval stage evaluates both index size and match quality. Matches below a cosine-similarity threshold of 0.35 are excluded. The evidence is classified as:
+
+- **Healthy:** At least 10 indexed posts and at least two qualifying matches for every analyzed media asset.
+- **Sparse:** Some qualifying history exists, but the index has fewer than 10 posts or one or more media assets have fewer than two qualifying matches.
+- **Cold start:** The index is empty or no match reaches the similarity threshold.
+
+Sparse mode reduces the historical-performance weight from 30% to 15%. Cold-start mode sets it to 0%. In cold-start mode, candidates return an empty historical-post list and are instructed not to claim historical support. Recommendations continue using media quality, trends, and audience fit, and the resulting evidence mode is saved in the recommendation output, included in traces, and displayed in Streamlit. As more historical posts are collected, rebuilding the vector index allows the workflow to move automatically from cold-start or sparse mode to healthy mode.
 
 ## Mapping ToT roles to implementation tools
 
@@ -305,7 +325,7 @@ The most relevant risk is branch explosion. Recommendation generation can combin
 
 ### Mitigation
 
-The workflow applies a fixed search budget: three strategy branches, six complete candidates, a maximum depth of two, and a final beam width of three. Evidence is retrieved once and reused across branches. Development mode replaces Gemini generation with deterministic mock output during integration testing. Together, these controls keep model calls and latency predictable while preserving enough branching to demonstrate ToT reasoning.
+The workflow applies a fixed search budget: three strategy branches, six complete candidates, a maximum depth of two, and a final beam width of three. Evidence is retrieved once and reused across branches. Low-similarity historical matches are filtered, and adaptive scoring prevents sparse history from being over-weighted. Development mode replaces Gemini generation with deterministic mock output during integration testing. Together, these controls keep model calls and latency predictable while preserving enough branching to demonstrate ToT reasoning.
 
 ## Conclusion
 

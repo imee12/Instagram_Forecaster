@@ -88,10 +88,7 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
                 ),
                 "history_ready": state.get("history_ready")
                 or (history is not None and not history.empty)
-                or (
-                    history is None
-                    and artifact_exists(artifacts.historical_matches_path)
-                ),
+                or artifact_exists(artifacts.historical_matches_path),
                 "trends_ready": state.get("trends_ready")
                 or (
                     trends is not None
@@ -113,6 +110,15 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
                 "historical_match_count": state.get("historical_match_count", 0)
                 if history is None
                 else len(history),
+                "historical_evidence_mode": state.get("historical_evidence_mode")
+                or (
+                    str(history.iloc[0].get("historical_evidence_mode", "healthy"))
+                    if history is not None and not history.empty
+                    else "cold_start"
+                ),
+                "historical_index_size": state.get("historical_index_size", 0)
+                if history is None or history.empty
+                else int(history.iloc[0].get("historical_index_size", len(history))),
                 "trend_signal_count": state.get("trend_signal_count", 0)
                 if trends is None
                 else len(trends.agent_signals),
@@ -152,12 +158,22 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
     def retrieve_history(state: ForecastWorkflowState) -> dict[str, Any]:
         try:
             matches = service.retrieve_history()
-            if matches.empty:
-                raise ValueError("Historical retrieval produced no matches.")
+            mode = (
+                "cold_start"
+                if matches.empty
+                else str(matches.iloc[0].get("historical_evidence_mode", "healthy"))
+            )
+            index_size = (
+                0
+                if matches.empty
+                else int(matches.iloc[0].get("historical_index_size", len(matches)))
+            )
             return {
                 "history_ready": True,
                 "history_refreshed": True,
                 "historical_match_count": len(matches),
+                "historical_evidence_mode": mode,
+                "historical_index_size": index_size,
                 "recommendations_ready": False,
                 "current_stage": "history_complete",
             }

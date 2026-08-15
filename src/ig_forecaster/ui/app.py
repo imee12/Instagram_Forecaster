@@ -190,6 +190,7 @@ def _render_recommendation_card(row: pd.Series) -> None:
     )
     rank = int(row.get("rank", 0))
     score = float(row.get("overall_score", 0))
+    historical_mode = str(row.get("historical_evidence_mode", "healthy"))
     st.markdown(
         f"""
         <div class="recommendation-card">
@@ -203,6 +204,9 @@ def _render_recommendation_card(row: pd.Series) -> None:
             <div class="recommendation-meta">
                 Strategy: {escape(str(row.get('thought_branch', 'Evidence-ranked candidate')))}
             </div>
+            <div class="recommendation-meta">
+                Historical evidence: {escape(historical_mode.replace('_', ' ').title())}
+            </div>
             <strong>Hook</strong><br>{escape(str(row.get('hook', '')))}<br><br>
             <strong>Why it works</strong><br>{escape(str(row.get('rationale', '')))}<br>
             <div style="margin-top:.65rem">{pills}</div>
@@ -211,6 +215,11 @@ def _render_recommendation_card(row: pd.Series) -> None:
         unsafe_allow_html=True,
     )
     with st.expander(f"Execution details for recommendation {rank}"):
+        if historical_mode != "healthy":
+            st.warning(
+                "Historical evidence is limited. This recommendation relies more "
+                "heavily on trends, media quality, and audience fit."
+            )
         if row.get("branch_hypothesis"):
             st.caption("Tree-of-Thoughts branch hypothesis")
             st.write(row.get("branch_hypothesis"))

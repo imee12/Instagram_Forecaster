@@ -222,6 +222,24 @@ def test_dev_mode_uses_mock_recommendations_without_gemini(monkeypatch):
     ).all()
 
 
+def test_dev_mode_cold_start_redistributes_historical_weight(monkeypatch):
+    media, _, report = recommendation_context()
+    monkeypatch.setattr(config, "DEV_MODE", True)
+
+    recommendations = generate_content_recommendations(
+        media,
+        pd.DataFrame(),
+        report,
+        recommendation_count=1,
+    )
+
+    row = recommendations.iloc[0]
+    assert row["historical_evidence_mode"] == "cold_start"
+    assert row["historical_weight"] == 0
+    assert row["historical_post_ids"] == []
+    assert row["overall_score"] == pytest.approx(75)
+
+
 def test_save_content_recommendations_writes_json_and_csv(tmp_path):
     frame = pd.DataFrame(
         [

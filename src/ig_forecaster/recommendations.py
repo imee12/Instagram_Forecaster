@@ -25,6 +25,21 @@ SCORE_WEIGHTS = {
     "media_quality": 0.20,
     "audience_fit": 0.20,
 }
+HISTORICAL_MODE_WEIGHTS = {
+    "healthy": SCORE_WEIGHTS,
+    "sparse": {
+        "historical_performance": 0.15,
+        "trend_alignment": 0.364286,
+        "media_quality": 0.242857,
+        "audience_fit": 0.242857,
+    },
+    "cold_start": {
+        "historical_performance": 0.0,
+        "trend_alignment": 0.428572,
+        "media_quality": 0.285714,
+        "audience_fit": 0.285714,
+    },
+}
 
 
 class RecommendationScores(BaseModel):
@@ -47,8 +62,11 @@ class RecommendationCandidate(BaseModel):
         description="Exact trend topics from the supplied trend signals."
     )
     historical_post_ids: list[str] = Field(
-        min_length=1,
-        description="Exact historical post IDs from the supplied matches."
+        default_factory=list,
+        description=(
+            "Exact historical post IDs from the supplied matches, or an empty "
+            "list when historical evidence is unavailable."
+        ),
     )
     scores: RecommendationScores
     confidence: float = Field(ge=0, le=100)
@@ -99,12 +117,17 @@ def _recommendation_trace_inputs(inputs: dict) -> dict:
 def _recommendation_trace_outputs(output: pd.DataFrame | None) -> dict:
     if output is None:
         return {"status": "failed"}
-    return {
+    result = {
         "recommendation_count": len(output),
         "recommendations": output[
             ["rank", "media_file", "post_format", "concept", "overall_score"]
         ].to_dict(orient="records"),
     }
+    if "historical_evidence_mode" in output.columns and not output.empty:
+        result["historical_evidence_mode"] = output.iloc[0][
+            "historical_evidence_mode"
+        ]
+    return result
 
 
 def _json_records(frame: pd.DataFrame) -> list[dict]:
@@ -149,17 +172,17 @@ def _prepare_context(
 ) -> tuple[list[dict], list[dict], list[dict]]:
     if media_analyses.empty:
         raise ValueError("Cannot generate recommendations without analyzed media.")
-    if historical_matches.empty:
-        raise ValueError("Cannot generate recommendations without historical matches.")
     if trend_report.agent_signals.empty:
         raise ValueError("Cannot generate recommendations without trend signals.")
 
-    historical = _add_historical_performance_metrics(historical_matches)
-    if "retrieval_rank" in historical.columns:
-        historical = historical.sort_values(["media_file", "retrieval_rank"])
-    historical = historical.groupby("media_file", as_index=False, group_keys=False).head(
-        MAX_HISTORICAL_MATCHES_PER_MEDIA
-    )
+    historical = historical_matches.copy()
+    if not historical.empty:
+        historical = _add_historical_performance_metrics(historical)
+        if "retrieval_rank" in historical.columns:
+            historical = historical.sort_values(["media_file", "retrieval_rank"])
+        historical = historical.groupby(
+            "media_file", as_index=False, group_keys=False
+        ).head(MAX_HISTORICAL_MATCHES_PER_MEDIA)
     trends = trend_report.agent_signals.sort_values("rank").head(MAX_TREND_SIGNALS)
 
     return (
@@ -169,12 +192,31 @@ def _prepare_context(
     )
 
 
-def _overall_score(scores: RecommendationScores) -> float:
+def _historical_evidence_mode(historical_context: list[dict]) -> str:
+    if not historical_context:
+        return "cold_start"
+    modes = {
+        str(item.get("historical_evidence_mode"))
+        for item in historical_context
+        if item.get("historical_evidence_mode")
+    }
+    if "cold_start" in modes:
+        return "cold_start"
+    if "sparse" in modes:
+        return "sparse"
+    return "healthy"
+
+
+def _overall_score(
+    scores: RecommendationScores,
+    historical_mode: str = "healthy",
+) -> float:
+    weights = HISTORICAL_MODE_WEIGHTS.get(historical_mode, SCORE_WEIGHTS)
     return round(
-        (scores.historical_performance * SCORE_WEIGHTS["historical_performance"])
-        + (scores.trend_alignment * SCORE_WEIGHTS["trend_alignment"])
-        + (scores.media_quality * SCORE_WEIGHTS["media_quality"])
-        + (scores.audience_fit * SCORE_WEIGHTS["audience_fit"]),
+        (scores.historical_performance * weights["historical_performance"])
+        + (scores.trend_alignment * weights["trend_alignment"])
+        + (scores.media_quality * weights["media_quality"])
+        + (scores.audience_fit * weights["audience_fit"]),
         2,
     )
 
@@ -197,6 +239,11 @@ def _validate_evidence(
         if candidate.media_file not in media_files:
             raise ValueError(
                 f"Recommendation cited unknown media file: {candidate.media_file}"
+            )
+        if historical_context and not candidate.historical_post_ids:
+            raise ValueError(
+                "Recommendation omitted historical evidence even though matches "
+                "were available."
             )
         unknown_trends = set(candidate.supporting_trends) - trend_topics
         if unknown_trends:
@@ -229,6 +276,7 @@ def _plan_thought_branches(
     trend_context: list[dict],
     branch_count: int,
 ) -> list[RecommendationThoughtBranch]:
+    historical_mode = _historical_evidence_mode(historical_context)
     prompt = f"""
 You are planning a bounded Tree-of-Thoughts search for Instagram content
 recommendations for a young singer, actor, and fashion performer.
@@ -246,6 +294,10 @@ SIMILAR HISTORICAL POSTS:
 
 RANKED GOOGLE TREND SIGNALS:
 {json.dumps(trend_context, indent=2)}
+
+HISTORICAL EVIDENCE MODE: {historical_mode}
+When the mode is sparse, treat historical comparisons as weak supporting
+evidence. When it is cold_start, do not claim historical support.
 """
     response = client.models.generate_content(
         model=MODEL_NAME,
@@ -279,6 +331,12 @@ def _expand_thought_branch(
     historical_context: list[dict],
     trend_context: list[dict],
 ) -> list[RecommendationCandidate]:
+    historical_mode = _historical_evidence_mode(historical_context)
+    historical_instruction = (
+        "Cite at least one exact historical post_id from the supplied matches."
+        if historical_context
+        else "Return an empty historical_post_ids list and do not claim historical support."
+    )
     prompt = f"""
 Expand this strategy branch into exactly {candidate_count} distinct Instagram
 post candidates for a young singer, actor, and fashion performer.
@@ -289,9 +347,12 @@ STRATEGY BRANCH:
 Use only the supplied facts and evidence. Do not invent media, historical
 results, trend topics, events, songs, locations, partnerships, or backstory.
 Every candidate must select one exact media file, cite at least one exact trend
-topic and historical post_id, contain practical execution guidance, and score
+topic, contain practical execution guidance, and score
 the four evidence dimensions from 0 to 100. Return structured candidates only;
 do not provide hidden chain-of-thought.
+
+HISTORICAL EVIDENCE MODE: {historical_mode}
+{historical_instruction}
 
 MEDIA ANALYSES:
 {json.dumps(media_context, indent=2)}
@@ -341,12 +402,16 @@ def _rank_thought_candidates(
         historical_context,
         trend_context,
     )
+    historical_mode = _historical_evidence_mode(historical_context)
+    score_weights = HISTORICAL_MODE_WEIGHTS[historical_mode]
     records = []
     for branch, candidate in expanded:
         record = candidate.model_dump()
         scores = record.pop("scores")
         record.update({f"{key}_score": value for key, value in scores.items()})
-        record["overall_score"] = _overall_score(candidate.scores)
+        record["overall_score"] = _overall_score(candidate.scores, historical_mode)
+        record["historical_evidence_mode"] = historical_mode
+        record["historical_weight"] = score_weights["historical_performance"]
         record["thought_branch"] = branch.name
         record["branch_hypothesis"] = branch.hypothesis
         records.append(record)
@@ -398,7 +463,11 @@ def _generate_mock_tot_recommendations(
             rationale="This deterministic result exercises the pipeline without Gemini ToT calls.",
             execution_notes=["Use this output to validate LangGraph, LangSmith, and the UI."],
             supporting_trends=[trend_topics[index % len(trend_topics)]],
-            historical_post_ids=[historical_ids[index % len(historical_ids)]],
+            historical_post_ids=(
+                [historical_ids[index % len(historical_ids)]]
+                if historical_ids
+                else []
+            ),
             scores=RecommendationScores(
                 historical_performance=75 - index,
                 trend_alignment=75 - index,

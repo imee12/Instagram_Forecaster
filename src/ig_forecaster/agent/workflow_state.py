@@ -24,6 +24,8 @@ class ForecastWorkflowState(TypedDict, total=False):
     media_analysis_count: int
     media_error_count: int
     historical_match_count: int
+    historical_evidence_mode: str
+    historical_index_size: int
     trend_signal_count: int
     recommendation_count: int
 
