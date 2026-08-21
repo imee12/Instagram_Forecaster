@@ -207,7 +207,9 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
     @traceable(name="DEV MODE - Mock ToT Graph Node", run_type="chain")
     def dev_mock_tot(state: ForecastWorkflowState) -> dict[str, Any]:
         try:
-            recommendations = service.generate_recommendations()
+            recommendations = service.generate_recommendations(
+                recommendation_brief=state.get("recommendation_brief") or None
+            )
             if recommendations.empty:
                 raise ValueError("Recommendation generation produced no recommendations.")
             return {
@@ -234,6 +236,7 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
                 historical_context,
                 trend_context,
                 DEFAULT_THOUGHT_BRANCH_COUNT,
+                state.get("recommendation_brief"),
             )
             return {
                 "tot_media_context": media_context,
@@ -266,6 +269,7 @@ def build_workflow_nodes(service: PipelineService) -> dict[str, WorkflowNode]:
                     state["tot_media_context"],
                     state["tot_historical_context"],
                     state["tot_trend_context"],
+                    state.get("recommendation_brief"),
                 )
                 expanded.extend(
                     {

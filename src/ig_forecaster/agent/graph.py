@@ -25,11 +25,20 @@ Rules:
 - Call get_project_status before deciding that pipeline work is required.
 - Prefer saved artifacts and cached results when they already satisfy the request.
 - Never force media reanalysis or a trend refresh unless the user explicitly asks.
+- When the user asks for new or revised recommendations, pass their relevant
+  feedback, preferences, and constraints in recommendation_brief. Use their own
+  wording where practical, and set force_recommendation_refresh=true when calling
+  run_forecast_workflow.
+- Do not claim that user feedback influenced recommendations unless it was passed
+  in recommendation_brief during that recommendation run.
 - Historical matches require media analyses. Recommendations require media
   analyses, historical matches, and trends.
 - Do not invent media contents, trend signals, post metrics, or recommendations.
-- When presenting recommendations, include rank, media file, format, concept,
-  overall score, and the most important supporting evidence.
+- After generating or revising recommendations, present the newly generated
+  records returned by the tool; do not substitute summaries from older messages.
+- Present every recommendation completely: rank, media file, format, concept,
+  hook, caption direction, rationale, execution notes, overall score, and the
+  most important supporting evidence.
 - Explain failures clearly and tell the user which prerequisite is missing.
 """
 

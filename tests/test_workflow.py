@@ -80,8 +80,8 @@ class FakeWorkflowService:
         self.trends = SimpleNamespace(agent_signals=pd.DataFrame([{"topic": "music"}]))
         return self.trends
 
-    def generate_recommendations(self):
-        self.calls.append(("recommendations", False))
+    def generate_recommendations(self, recommendation_brief=None):
+        self.calls.append(("recommendations", recommendation_brief or False))
         self.recommendations = pd.DataFrame([{"rank": 1}])
         return self.recommendations
 
@@ -131,6 +131,25 @@ def test_workflow_reuses_complete_artifacts():
 
     assert result["recommendations_ready"] is True
     assert service.calls == []
+
+
+def test_user_brief_forces_recommendation_refresh(monkeypatch):
+    monkeypatch.setattr(config, "DEV_MODE", True)
+    service = FakeWorkflowService()
+    service.media = pd.DataFrame([{"file_name": "photo.jpg"}])
+    service.history = pd.DataFrame([{"post_id": 1}])
+    service.trends = SimpleNamespace(agent_signals=pd.DataFrame([{"topic": "music"}]))
+    service.recommendations = pd.DataFrame([{"rank": 1}])
+
+    result = ForecastWorkflow(service).invoke(
+        thread_id="feedback-thread",
+        recommendation_brief="Make the concepts more candid and fashion-focused.",
+    )
+
+    assert result["recommendations_ready"] is True
+    assert service.calls == [
+        ("recommendations", "Make the concepts more candid and fashion-focused.")
+    ]
 
 
 def test_workflow_routes_stage_failures_to_error_handler():

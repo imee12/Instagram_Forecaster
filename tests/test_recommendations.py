@@ -168,6 +168,49 @@ def test_generate_content_recommendations_scores_and_ranks_candidates():
     assert recommendations.iloc[0]["thought_branch"] == "Branch 1"
 
 
+def test_recommendation_brief_reaches_planning_and_expansion_prompts():
+    media, historical, report = recommendation_context()
+    parsed = RecommendationCandidates(
+        candidates=[
+            make_candidate(
+                "rehearsal.mov",
+                f"Candidate {number}",
+                {
+                    "historical_performance": 70,
+                    "trend_alignment": 70,
+                    "media_quality": 70,
+                    "audience_fit": 70,
+                },
+            )
+            for number in range(3)
+        ]
+    )
+    client = FakeClient(parsed)
+    prompts = []
+    original_generate = client.models.generate_content
+
+    def capture_prompt(**kwargs):
+        prompts.append(kwargs["contents"])
+        return original_generate(**kwargs)
+
+    client.models.generate_content = capture_prompt
+    generate_content_recommendations(
+        media,
+        historical,
+        report,
+        client_instance=client,
+        candidate_count=3,
+        recommendation_count=3,
+        recommendation_brief="Use candid backstage footage and avoid static posts.",
+    )
+
+    assert len(prompts) == 4
+    assert all(
+        "Use candid backstage footage and avoid static posts." in prompt
+        for prompt in prompts
+    )
+
+
 def test_recommendations_reject_unknown_evidence():
     media, historical, report = recommendation_context()
     candidates = [

@@ -10,6 +10,7 @@ class ForecastWorkflowState(TypedDict, total=False):
     force_media_refresh: bool
     force_trend_refresh: bool
     force_recommendation_refresh: bool
+    recommendation_brief: str
 
     media_ready: bool
     history_ready: bool

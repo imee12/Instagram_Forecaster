@@ -21,6 +21,7 @@ def run_workflow(
     force_media_refresh: bool = False,
     force_trend_refresh: bool = False,
     force_recommendation_refresh: bool = False,
+    recommendation_brief: str | None = None,
 ) -> dict:
     """Run the cache-aware pipeline through its LangGraph workflow."""
     # Imported lazily so legacy pipeline users do not need to initialize the
@@ -35,6 +36,7 @@ def run_workflow(
             force_media_refresh=force_media_refresh,
             force_trend_refresh=force_trend_refresh,
             force_recommendation_refresh=force_recommendation_refresh,
+            recommendation_brief=recommendation_brief,
         )
     )
 

@@ -156,6 +156,15 @@ def _gemini_is_configured() -> bool:
     return bool(key and key != "your-gemini-api-key")
 
 
+def _workflow_error_message(result: dict) -> str | None:
+    errors = result.get("errors") or []
+    if errors:
+        return "\n".join(str(error) for error in errors)
+    if result.get("current_stage") == "failed":
+        return "The workflow failed without returning an error message."
+    return None
+
+
 def _status(agent: RemoteIGForecasterAgent) -> dict:
     service = agent.service
     unavailable = 0
@@ -243,7 +252,7 @@ def _render_recommendation_card(row: pd.Series) -> None:
                     }
                 ),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
 
 
@@ -304,36 +313,58 @@ def _render_sidebar(
 
         st.divider()
         st.markdown("### Pipeline actions")
-        if st.button("Analyze new media", use_container_width=True):
-            with st.status("Analyzing media…"):
-                agent.run_workflow(
+        if st.button("Analyze new media", width="stretch"):
+            st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
+                thread_id
+            )
+            with st.status("Analyzing media…") as progress:
+                result = agent.run_workflow(
                     thread_id=thread_id,
                     force_media_refresh=True,
                 )
-                st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
-                    thread_id
-                )
-            st.rerun()
-        if st.button("Refresh Google Trends", use_container_width=True):
-            with st.status("Refreshing trends…"):
-                agent.run_workflow(
+                workflow_error = _workflow_error_message(result)
+                if workflow_error:
+                    progress.update(label="Media analysis failed", state="error")
+                    st.error(workflow_error)
+                else:
+                    progress.update(label="Media analysis complete", state="complete")
+                    st.rerun()
+        if st.button("Refresh Google Trends", width="stretch"):
+            st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
+                thread_id
+            )
+            with st.status("Refreshing trends…") as progress:
+                result = agent.run_workflow(
                     thread_id=thread_id,
                     force_trend_refresh=True,
                 )
-                st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
-                    thread_id
-                )
-            st.rerun()
-        if st.button("Generate recommendations", type="primary", use_container_width=True):
-            with st.status("Generating recommendations…"):
-                agent.run_workflow(
+                workflow_error = _workflow_error_message(result)
+                if workflow_error:
+                    progress.update(label="Trend refresh failed", state="error")
+                    st.error(workflow_error)
+                else:
+                    progress.update(label="Trend refresh complete", state="complete")
+                    st.rerun()
+        if st.button("Generate recommendations", type="primary", width="stretch"):
+            st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
+                thread_id
+            )
+            with st.status("Generating recommendations…") as progress:
+                result = agent.run_workflow(
                     thread_id=thread_id,
                     force_recommendation_refresh=True,
                 )
-                st.session_state.last_workflow_thread_id = agent.workflow_thread_id(
-                    thread_id
-                )
-            st.rerun()
+                workflow_error = _workflow_error_message(result)
+                if workflow_error:
+                    progress.update(
+                        label="Recommendation generation failed", state="error"
+                    )
+                    st.error(workflow_error)
+                else:
+                    progress.update(
+                        label="Recommendations generated", state="complete"
+                    )
+                    st.rerun()
 
         if st.session_state.get("last_workflow_thread_id"):
             st.caption("Latest LangGraph workflow thread")
@@ -341,7 +372,7 @@ def _render_sidebar(
             st.link_button(
                 "Open local LangGraph Studio",
                 "https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024",
-                use_container_width=True,
+                width="stretch",
             )
 
         st.divider()
@@ -400,7 +431,7 @@ def main() -> None:
                     for column in ("file_name", "media_type", "visual_summary", "quality_notes")
                     if column in analyses.columns
                 ]
-                st.dataframe(analyses[display_columns], hide_index=True, use_container_width=True)
+                st.dataframe(analyses[display_columns], hide_index=True, width="stretch")
                 selected = st.selectbox("Preview media", analyses["file_name"].tolist())
                 selected_row = analyses.loc[analyses["file_name"] == selected].iloc[0]
                 media_path = Path(selected_row.get("file_path", ""))
@@ -416,9 +447,9 @@ def main() -> None:
                 st.info("No trend report found.")
             else:
                 st.markdown("#### Ranked signals")
-                st.dataframe(report.agent_signals.head(30), hide_index=True, use_container_width=True)
+                st.dataframe(report.agent_signals.head(30), hide_index=True, width="stretch")
                 st.markdown("#### Keyword momentum")
-                st.dataframe(report.keyword_momentum, hide_index=True, use_container_width=True)
+                st.dataframe(report.keyword_momentum, hide_index=True, width="stretch")
 
         with history_tab:
             matches = agent.service.load_saved_historical_matches()
@@ -440,7 +471,7 @@ def main() -> None:
                     )
                     if column in matches.columns
                 ]
-                st.dataframe(matches[columns], hide_index=True, use_container_width=True)
+                st.dataframe(matches[columns], hide_index=True, width="stretch")
 
         with activity_tab:
             artifacts = agent.service.load_project()
@@ -450,7 +481,7 @@ def main() -> None:
             if errors.empty:
                 st.success("No media analysis errors in the latest run.")
             else:
-                st.dataframe(errors, hide_index=True, use_container_width=True)
+                st.dataframe(errors, hide_index=True, width="stretch")
             st.caption("Detailed model and tool traces are available in LangSmith.")
 
     with chat:

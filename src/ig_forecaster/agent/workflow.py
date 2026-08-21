@@ -102,12 +102,14 @@ class ForecastWorkflow:
         force_media_refresh: bool = False,
         force_trend_refresh: bool = False,
         force_recommendation_refresh: bool = False,
+        recommendation_brief: str | None = None,
     ) -> ForecastWorkflowState:
         return {
             "dataset_path": str(self.service.artifacts.dataset_path),
             "force_media_refresh": force_media_refresh,
             "force_trend_refresh": force_trend_refresh,
             "force_recommendation_refresh": force_recommendation_refresh,
+            "recommendation_brief": (recommendation_brief or "").strip(),
             "media_refreshed": False,
             "history_refreshed": False,
             "trends_refreshed": False,
@@ -123,12 +125,14 @@ class ForecastWorkflow:
         force_media_refresh: bool = False,
         force_trend_refresh: bool = False,
         force_recommendation_refresh: bool = False,
+        recommendation_brief: str | None = None,
     ) -> ForecastWorkflowState:
         return self.graph.invoke(
             self.initial_state(
                 force_media_refresh=force_media_refresh,
                 force_trend_refresh=force_trend_refresh,
                 force_recommendation_refresh=force_recommendation_refresh,
+                recommendation_brief=recommendation_brief,
             ),
             config=self._config(thread_id),
         )
@@ -140,12 +144,14 @@ class ForecastWorkflow:
         force_media_refresh: bool = False,
         force_trend_refresh: bool = False,
         force_recommendation_refresh: bool = False,
+        recommendation_brief: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         return self.graph.stream(
             self.initial_state(
                 force_media_refresh=force_media_refresh,
                 force_trend_refresh=force_trend_refresh,
                 force_recommendation_refresh=force_recommendation_refresh,
+                recommendation_brief=recommendation_brief,
             ),
             config=self._config(thread_id),
             stream_mode="updates",

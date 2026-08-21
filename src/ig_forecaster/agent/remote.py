@@ -81,6 +81,7 @@ class RemoteIGForecasterAgent:
         force_media_refresh: bool = False,
         force_trend_refresh: bool = False,
         force_recommendation_refresh: bool = False,
+        recommendation_brief: str | None = None,
     ) -> dict[str, Any]:
         workflow_thread_id = self.workflow_thread_id(thread_id)
         self._ensure_thread(
@@ -96,6 +97,7 @@ class RemoteIGForecasterAgent:
             force_media_refresh=force_media_refresh,
             force_trend_refresh=force_trend_refresh,
             force_recommendation_refresh=force_recommendation_refresh,
+            recommendation_brief=recommendation_brief,
         )
         return self.client.runs.wait(
             workflow_thread_id,

@@ -7,6 +7,7 @@ from ig_forecaster.agent.tools import build_agent_tools
 
 class FakeService:
     def __init__(self):
+        self.recommendation_brief = None
         self.artifacts = SimpleNamespace(
             project_root="/project",
             dataset_path="/project/data.csv",
@@ -42,7 +43,8 @@ class FakeService:
     def retrieve_trends(self, force_refresh=False):
         return self.load_saved_trends()
 
-    def generate_recommendations(self):
+    def generate_recommendations(self, recommendation_brief=None):
+        self.recommendation_brief = recommendation_brief
         return self.load_saved_recommendations()
 
 
@@ -73,10 +75,15 @@ def test_project_status_uses_only_saved_artifacts():
 
 
 def test_recommendation_tool_returns_serializable_records():
-    result = tools_by_name()["generate_post_recommendations"].invoke({})
+    service = FakeService()
+    tool = {tool.name: tool for tool in build_agent_tools(service)}[
+        "generate_post_recommendations"
+    ]
+    result = tool.invoke({"recommendation_brief": "Prioritize candid fashion Reels"})
 
     assert result["recommendation_count"] == 1
     assert result["recommendations"][0]["concept"] == "Music Reel"
+    assert service.recommendation_brief == "Prioritize candid fashion Reels"
 
 
 def test_workflow_tool_gets_thread_id_from_runtime_not_model_schema():
@@ -91,4 +98,5 @@ def test_workflow_tool_gets_thread_id_from_runtime_not_model_schema():
         "force_media_refresh",
         "force_trend_refresh",
         "force_recommendation_refresh",
+        "recommendation_brief",
     }

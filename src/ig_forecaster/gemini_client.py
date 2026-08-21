@@ -18,7 +18,9 @@ try:
 except ImportError:  # pragma: no cover - exercised in lightweight environments
     langsmith_wrappers = None
 
-MODEL_NAME = "gemini-flash-latest"
+MODEL_NAME = "gemini-3.5-flash-lite"
+GEMINI_MAX_ATTEMPTS = 4
+GEMINI_RETRY_DELAYS_SECONDS = (2, 4, 8)
 
 client = None
 
@@ -48,6 +50,55 @@ def get_or_create_client():
     if client is None:
         client = get_client()
     return client
+
+
+def _is_retryable_gemini_error(exc: Exception) -> bool:
+    # Quota/rate-limit responses (429 / RESOURCE_EXHAUSTED) must not be retried
+    # automatically: doing so can waste a limited request budget. The caller can
+    # retry explicitly after the provider's stated reset time.
+    message = str(exc).upper()
+    if "RESOURCE_EXHAUSTED" in message or "QUOTA EXCEEDED" in message:
+        return False
+
+    retryable_codes = {500, 502, 503, 504}
+    for value in (
+        getattr(exc, "code", None),
+        getattr(exc, "status_code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        try:
+            if int(value) in retryable_codes:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+    return any(
+        marker in message
+        for marker in (
+            "500 INTERNAL",
+            "502",
+            "503",
+            "504",
+            "UNAVAILABLE",
+            "DEADLINE_EXCEEDED",
+        )
+    )
+
+
+def generate_content_with_retry(client_instance, **kwargs):
+    """Retry transient Gemini capacity and transport failures with backoff."""
+    for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
+        try:
+            return client_instance.models.generate_content(**kwargs)
+        except Exception as exc:
+            if attempt == GEMINI_MAX_ATTEMPTS or not _is_retryable_gemini_error(exc):
+                raise
+            delay = GEMINI_RETRY_DELAYS_SECONDS[attempt - 1]
+            print(
+                f"[IG Forecaster] Gemini temporarily unavailable; retrying in "
+                f"{delay}s (attempt {attempt + 1}/{GEMINI_MAX_ATTEMPTS})."
+            )
+            time.sleep(delay)
 
 
 def wait_until_ready(uploaded_file, client_instance, timeout_seconds: int = 600):

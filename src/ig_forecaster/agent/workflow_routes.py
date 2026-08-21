@@ -28,6 +28,10 @@ def choose_next_stage(state: ForecastWorkflowState) -> str:
         state.get(key)
         for key in ("media_refreshed", "history_refreshed", "trends_refreshed")
     )
+    if state.get("recommendation_brief") and not state.get(
+        "recommendations_generated"
+    ):
+        return "generate_recommendations"
     if state.get("force_recommendation_refresh") and not state.get(
         "recommendations_generated"
     ):

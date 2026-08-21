@@ -83,9 +83,17 @@ def build_agent_tools(
         }
 
     @tool("generate_post_recommendations")
-    def generate_recommendations() -> dict[str, Any]:
-        """Generate and save three recommendations from existing project artifacts."""
-        recommendations = service.generate_recommendations()
+    def generate_recommendations(
+        recommendation_brief: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate and save three recommendations from existing project artifacts.
+
+        Pass the user's creative direction, constraints, and feedback verbatim in
+        recommendation_brief so it can steer the Tree-of-Thoughts search.
+        """
+        recommendations = service.generate_recommendations(
+            recommendation_brief=recommendation_brief
+        )
         return {
             "recommendation_count": len(recommendations),
             "recommendations": _records(recommendations),
@@ -116,11 +124,14 @@ def build_agent_tools(
             force_media_refresh: bool = False,
             force_trend_refresh: bool = False,
             force_recommendation_refresh: bool = False,
+            recommendation_brief: str | None = None,
         ) -> dict[str, Any]:
             """Run the cache-aware LangGraph forecasting workflow.
 
             Use this when the user asks to run or update the full forecast.
-            Force refreshes only on explicit request.
+            Force refreshes only on explicit request. When the user asks for new
+            or revised recommendations, pass their creative direction and feedback
+            in recommendation_brief and set force_recommendation_refresh to true.
             """
             thread_id = runtime.config.get("configurable", {}).get("thread_id")
             if not thread_id:
@@ -130,8 +141,13 @@ def build_agent_tools(
                 force_media_refresh=force_media_refresh,
                 force_trend_refresh=force_trend_refresh,
                 force_recommendation_refresh=force_recommendation_refresh,
+                recommendation_brief=recommendation_brief,
             )
-            return dict(result)
+            payload = dict(result)
+            if payload.get("recommendations_ready") and not payload.get("errors"):
+                recommendations = service.load_saved_recommendations()
+                payload["recommendations"] = _records(recommendations)
+            return payload
 
         tools.append(run_forecast_workflow)
 

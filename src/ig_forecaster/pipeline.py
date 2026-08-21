@@ -348,6 +348,7 @@ class PipelineService:
         media_analyses: pd.DataFrame | None = None,
         historical_matches: pd.DataFrame | None = None,
         trend_report: TrendReport | None = None,
+        recommendation_brief: str | None = None,
     ) -> pd.DataFrame:
         analyses = (
             media_analyses
@@ -363,7 +364,12 @@ class PipelineService:
         if trends is None:
             raise ValueError("Retrieve trends before generating recommendations.")
 
-        recommendations = generate_content_recommendations(analyses, matches, trends)
+        recommendations = generate_content_recommendations(
+            analyses,
+            matches,
+            trends,
+            recommendation_brief=recommendation_brief,
+        )
         save_content_recommendations(recommendations, self.artifacts.output_folder)
         return recommendations
 

@@ -10,7 +10,7 @@ from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from . import config
-from .gemini_client import MODEL_NAME, get_or_create_client
+from .gemini_client import MODEL_NAME, generate_content_with_retry, get_or_create_client
 from .trends import TrendReport
 
 
@@ -52,10 +52,16 @@ class RecommendationScores(BaseModel):
 class RecommendationCandidate(BaseModel):
     media_file: str = Field(description="Exact file name from the supplied media analyses.")
     post_format: Literal["reel", "carousel", "static_post", "story"]
-    concept: str
-    hook: str
-    caption_direction: str
-    rationale: str
+    concept: str = Field(min_length=3)
+    hook: str = Field(
+        min_length=3,
+        description=(
+            "A complete, audience-facing opening line or first-frame visual hook; "
+            "never a placeholder or field label."
+        ),
+    )
+    caption_direction: str = Field(min_length=3)
+    rationale: str = Field(min_length=3)
     execution_notes: list[str] = Field(min_length=1)
     supporting_trends: list[str] = Field(
         min_length=1,
@@ -111,6 +117,7 @@ def _recommendation_trace_inputs(inputs: dict) -> dict:
         "thought_branch_count": inputs.get(
             "thought_branch_count", DEFAULT_THOUGHT_BRANCH_COUNT
         ),
+        "recommendation_brief": inputs.get("recommendation_brief"),
     }
 
 
@@ -275,6 +282,7 @@ def _plan_thought_branches(
     historical_context: list[dict],
     trend_context: list[dict],
     branch_count: int,
+    recommendation_brief: str | None = None,
 ) -> list[RecommendationThoughtBranch]:
     historical_mode = _historical_evidence_mode(historical_context)
     prompt = f"""
@@ -298,8 +306,14 @@ RANKED GOOGLE TREND SIGNALS:
 HISTORICAL EVIDENCE MODE: {historical_mode}
 When the mode is sparse, treat historical comparisons as weak supporting
 evidence. When it is cold_start, do not claim historical support.
+
+USER RECOMMENDATION BRIEF:
+{recommendation_brief or "No additional user preferences were supplied."}
+Treat the brief as creative direction and constraints, but never let it override
+the supplied evidence or cause facts to be invented.
 """
-    response = client.models.generate_content(
+    response = generate_content_with_retry(
+        client,
         model=MODEL_NAME,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -330,6 +344,7 @@ def _expand_thought_branch(
     media_context: list[dict],
     historical_context: list[dict],
     trend_context: list[dict],
+    recommendation_brief: str | None = None,
 ) -> list[RecommendationCandidate]:
     historical_mode = _historical_evidence_mode(historical_context)
     historical_instruction = (
@@ -350,9 +365,16 @@ Every candidate must select one exact media file, cite at least one exact trend
 topic, contain practical execution guidance, and score
 the four evidence dimensions from 0 to 100. Return structured candidates only;
 do not provide hidden chain-of-thought.
+Write every field completely. The hook must be a ready-to-use audience-facing
+opening line or specific first-frame visual, not a vague topic description.
 
 HISTORICAL EVIDENCE MODE: {historical_mode}
 {historical_instruction}
+
+USER RECOMMENDATION BRIEF:
+{recommendation_brief or "No additional user preferences were supplied."}
+Follow the brief where it is compatible with the supplied evidence. Do not
+invent facts to satisfy it.
 
 MEDIA ANALYSES:
 {json.dumps(media_context, indent=2)}
@@ -363,7 +385,8 @@ SIMILAR HISTORICAL POSTS:
 RANKED GOOGLE TREND SIGNALS:
 {json.dumps(trend_context, indent=2)}
 """
-    response = client.models.generate_content(
+    response = generate_content_with_retry(
+        client,
         model=MODEL_NAME,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -502,6 +525,7 @@ def generate_content_recommendations(
     candidate_count: int = DEFAULT_CANDIDATE_COUNT,
     recommendation_count: int = DEFAULT_RECOMMENDATION_COUNT,
     thought_branch_count: int = DEFAULT_THOUGHT_BRANCH_COUNT,
+    recommendation_brief: str | None = None,
 ) -> pd.DataFrame:
     if candidate_count < recommendation_count:
         raise ValueError("candidate_count cannot be smaller than recommendation_count.")
@@ -509,6 +533,7 @@ def generate_content_recommendations(
         raise ValueError("thought_branch_count must be between 2 and 4.")
     if thought_branch_count > candidate_count:
         raise ValueError("thought_branch_count cannot exceed candidate_count.")
+    recommendation_brief = (recommendation_brief or "").strip() or None
 
     media_context, historical_context, trend_context = _prepare_context(
         media_analyses,
@@ -532,6 +557,7 @@ def generate_content_recommendations(
         historical_context,
         trend_context,
         thought_branch_count,
+        recommendation_brief,
     )
     allocations = _candidate_allocations(candidate_count, thought_branch_count)
     expanded: list[tuple[RecommendationThoughtBranch, RecommendationCandidate]] = []
@@ -543,6 +569,7 @@ def generate_content_recommendations(
             media_context,
             historical_context,
             trend_context,
+            recommendation_brief,
         )
         expanded.extend((branch, candidate) for candidate in candidates)
 
